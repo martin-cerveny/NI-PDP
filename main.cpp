@@ -13,6 +13,13 @@ enum Type { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES};
 class Coordinates {
 public:
     int r, c;
+
+    [[nodiscard]] Coordinates next(const int cols) const {
+        if (c >= cols) {
+            return {r + 1, c};
+        }
+        return {r, c+1};
+    }
 };
 
 class Shape {
@@ -92,7 +99,7 @@ public:
         bestSolution = Solution(R, C);
         bestSolution.price = INT_MAX;
         currentSolution.price = 0;
-        solveRecursive(0, 0);
+        solveRecursive({0, 0});
     }
     void print() const {
          for (int r = 0; r < R; r++) {
@@ -160,19 +167,19 @@ private:
 
     }
 
-    void solveRecursive(int r, int c) {
+    void solveRecursive(Coordinates p) {
         totalCalls++;
         if (currentSolution.price >= bestSolution.price) return;
         if (bestSolution.price == trivialBound) return;
         if (abs(currentSolution.counts[Z] - currentSolution.counts[T]) - 1 > currentSolution.counts[NOT_DECIDED] / 4)
             return;
 
-        if (c >= C) {
-            c = 0;
-            r++;
+        if (p.c >= C) {
+            p.c = 0;
+            p.r++;
         }
 
-        if (r >= R) {
+        if (p.r >= R) {
             if (abs(currentSolution.counts[Z] - currentSolution.counts[T]) <= 1) {
                 if (currentSolution.price < bestSolution.price) {
                     bestSolution = currentSolution;
@@ -181,39 +188,39 @@ private:
             return;
         }
 
-        if (currentSolution.cellType[r][c] != NOT_DECIDED) {
-            solveRecursive(r, c+1);
+        if (currentSolution.cellType[p.r][p.c] != NOT_DECIDED) {
+            solveRecursive(p.next(C));
             return;
         }
 
         // 1) Try place shape
         for (const auto& shape : ShapesUpperLeft) {
-            if (canPutShape(shape, r, c, NOT_DECIDED)) {
-                putShape(shape, r, c);
-                solveRecursive(r, c+1);
+            if (canPutShape(shape, p.r, p.c, NOT_DECIDED)) {
+                putShape(shape, p.r, p.c);
+                solveRecursive(p.next(C));
                 if (bestSolution.price == trivialBound) return;
-                clearShape(shape, r, c);
+                clearShape(shape, p.r, p.c);
             }
         }
 
         // 2) Try leave not covered
         // A decision to create CLEAR tile cannot create a space, where some shape might fit
-        currentSolution.cellType[r][c] = CLEAR;
+        currentSolution.cellType[p.r][p.c] = CLEAR;
         for (const auto& shape : ShapesLowerRight) {
-            if (canPutShape(shape, r, c, CLEAR)) {
-                currentSolution.cellType[r][c] = NOT_DECIDED;
+            if (canPutShape(shape, p.r, p.c, CLEAR)) {
+                currentSolution.cellType[p.r][p.c] = NOT_DECIDED;
                 return;
             }
         }
         currentSolution.counts[NOT_DECIDED] --;
         currentSolution.counts[CLEAR] ++;
-        currentSolution.price += prices[r][c];
-        solveRecursive(r, c+1);
+        currentSolution.price += prices[p.r][p.c];
+        solveRecursive(p.next(C));
         if (bestSolution.price == trivialBound) return;
-        currentSolution.cellType[r][c] = NOT_DECIDED;
+        currentSolution.cellType[p.r][p.c] = NOT_DECIDED;
         currentSolution.counts[NOT_DECIDED] ++;
         currentSolution.counts[CLEAR] --;
-        currentSolution.price -= prices[r][c];
+        currentSolution.price -= prices[p.r][p.c];
 
     }
 
