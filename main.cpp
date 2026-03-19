@@ -13,12 +13,12 @@ enum Type { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES};
 class Coordinates {
 public:
     int r, c;
-
+	
     [[nodiscard]] Coordinates next(const int cols) const {
-        if (c >= cols) {
-            return {r + 1, c};
+        if (c+1 >= cols) {
+            return {r + 1, 0};
         }
-        return {r, c+1};
+        return {r, c + 1};
     }
 };
 
@@ -174,10 +174,6 @@ private:
         if (abs(currentSolution.counts[Z] - currentSolution.counts[T]) - 1 > currentSolution.counts[NOT_DECIDED] / 4)
             return;
 
-        if (p.c >= C) {
-            p.c = 0;
-            p.r++;
-        }
 
         if (p.r >= R) {
             if (abs(currentSolution.counts[Z] - currentSolution.counts[T]) <= 1) {
