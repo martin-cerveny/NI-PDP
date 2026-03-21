@@ -8,7 +8,7 @@
 using namespace std;
 
 constexpr int SHAPE_SIZE = 4;
-constexpr int DEPTH_LIMIT = 4;
+constexpr int DEPTH_LIMIT = 2;
 
 enum Type { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES };
 
@@ -96,6 +96,7 @@ public:
 void solve() {
         bestSolution = Solution(R, C);
         bestSolution.price = INT_MAX;
+        bestPriceShared = INT_MAX;
         
         Solution initialSolution = Solution(R, C);
         initialSolution.price = 0;
@@ -131,6 +132,7 @@ private:
     int trivialBound = 0;
     vector<vector<int>> prices;
     Solution bestSolution = Solution(0,0);
+    int bestPriceShared = INT_MAX;
     
     void putShapeState(Solution& state, const Shape& shape, const int r, const int c) const {
         state.counts[shape.type]++;
@@ -170,7 +172,7 @@ private:
     void solveRecursive(Coordinates p, Solution& current, int depth) {
         int currentBest;
         #pragma omp atomic read
-        currentBest = bestSolution.price;
+        currentBest = bestPriceShared;
 
         if (current.price >= currentBest) return;
         if (currentBest == trivialBound) return;
@@ -178,10 +180,15 @@ private:
 
         if (p.r >= R) {
             if (abs(current.counts[Z] - current.counts[T]) <= 1) {
-                #pragma omp critical
-                {
-                    if (current.price < bestSolution.price) {
-                        bestSolution = current;
+                if (current.price < currentBest) {
+                    #pragma omp critical
+                    {
+                        if (current.price < bestPriceShared) {
+                            #pragma omp atomic write
+                            bestPriceShared = current.price;
+        
+                            bestSolution = current;
+                        }
                     }
                 }
             }
@@ -199,7 +206,7 @@ private:
                     Solution nextState = current; 
                     putShapeState(nextState, shape, p.r, p.c);
                     
-                    #pragma omp task shared(bestSolution) firstprivate(nextState)
+                    #pragma omp task shared(bestSolution, bestPriceShared) firstprivate(nextState)
                     {
                         solveRecursive(p.next(C), nextState, depth + 1);
                     }
@@ -220,7 +227,7 @@ private:
                 nextStateClear.counts[CLEAR]++;
                 nextStateClear.price += prices[p.r][p.c];
                 
-                #pragma omp task shared(bestSolution) firstprivate(nextStateClear)
+                #pragma omp task shared(bestSolution, bestPriceShared) firstprivate(nextStateClear)
                 {
                     solveRecursive(p.next(C), nextStateClear, depth + 1);
                 }
