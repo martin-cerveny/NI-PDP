@@ -215,14 +215,14 @@ private:
 
             Solution nextStateClear = current;
             nextStateClear.cellType[p.r][p.c] = CLEAR;
-            bool valid = false;
+            bool valid = true;
             for (const auto& shape : ShapesLowerRight) {
                 if (canPutShapeState(nextStateClear, shape, p.r, p.c, CLEAR)) {
-                    valid = true; break;
+                    valid = false; break;
                 }
             }
             
-            if (!valid) {
+            if (valid) {
                 nextStateClear.counts[NOT_DECIDED]--;
                 nextStateClear.counts[CLEAR]++;
                 nextStateClear.price += prices[p.r][p.c];
@@ -243,13 +243,13 @@ private:
             }
 
             current.cellType[p.r][p.c] = CLEAR;
-            bool valid = false;
+            bool valid = true;
             for (const auto& shape : ShapesLowerRight) {
                 if (canPutShapeState(current, shape, p.r, p.c, CLEAR)) {
-                    valid = true; break;
+                    valid = false; break;
                 }
             }
-            if (!valid) {
+            if (valid) {
                 current.counts[NOT_DECIDED]--;
                 current.counts[CLEAR]++;
                 current.price += prices[p.r][p.c];

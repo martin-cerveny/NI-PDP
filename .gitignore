@@ -3,3 +3,4 @@ CMakeLists.txt
 a.out
 *.png
 venv/
+*.out
