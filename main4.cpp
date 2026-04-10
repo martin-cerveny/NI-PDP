@@ -13,13 +13,17 @@ using namespace std;
 #define MAX_COLS 20
 constexpr int SHAPE_SIZE = 4;
 
+constexpr int DEPTH_LIMIT = 4;
+
 enum Type { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES };
 
-// MPI TAGY
-#define TAG_WORK 1
-#define TAG_RESULT 2
-#define TAG_NEW_BOUND 3
-#define TAG_KILL 4
+// Communication Tags
+constexpr int TAG_REQUEST_WORK = 1;
+constexpr int TAG_TASK         = 2;
+constexpr int TAG_NEW_MIN      = 3;
+constexpr int TAG_UPDATE_MIN   = 4;
+constexpr int TAG_TERMINATE    = 5;
+constexpr int TAG_RESULT       = 6;
 
 class Coordinates {
 public:
@@ -75,9 +79,7 @@ public:
             }
         }
     }
-    void init(int R, int C) {
-        counts[NOT_DECIDED] = R * C;
-    }
+    void init(int R, int C) { counts[NOT_DECIDED] = R * C; }
 };
 
 struct State {
@@ -85,21 +87,15 @@ struct State {
     Coordinates p;
 };
 
-struct WorkResult {
-    int best_price;
-    Solution best_sol;
-};
-
 class Solver {
 public:
-    int mpi_rank, mpi_size;
-
     Solver(int rank, int size) : mpi_rank(rank), mpi_size(size) {}
 
     bool read() {
+        if (mpi_rank != 0) return true; // Only Master reads
         if (!(cin >> R >> C)) return false;
 
-        vector<int> allPrices(R*C);
+        vector<int> allPrices(R * C);
         for (int r = 0, idx = 0; r < R; r++) {
             for (int c = 0; c < C; c++) {
                 if (!(cin >> prices[r][c])) return false;
@@ -111,88 +107,206 @@ public:
 
         const int k = (R * C) % 4;
         trivialBound = 0;
-        for (int i = 0; i < k; i++) {
-            trivialBound += allPrices[i];
-        }
+        for (int i = 0; i < k; i++) trivialBound += allPrices[i];
+        
         return true;
     }
 
-    void run() {
-        if (mpi_rank == 0) {
-            masterRoutine();
-        } else {
-            slaveRoutine();
+    void broadcastParams() {
+        MPI_Bcast(&R, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&C, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&prices, MAX_ROWS * MAX_COLS, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&trivialBound, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    }
+    
+    void solve() {
+        if (mpi_size == 1) {
+            bestSolution.price = INT_MAX;
+            bestPriceShared = INT_MAX;
+            masterLogic();
+            return;
         }
+
+        if (mpi_rank == 0) masterLogic();
+        else slaveLogic();
     }
 
 private:
-    int R = 0;
-    int C = 0;
+    int mpi_rank, mpi_size;
+    int R = 0, C = 0;
     int trivialBound = 0;
     int prices[MAX_ROWS][MAX_COLS];
     
     Solution bestSolution;
     int bestPriceShared = INT_MAX;
-    const int DEPTH_LIMIT = 2; // For task parallelism
-
-    void putShape(Solution& state, const Shape& shape, const int r, const int c) const {
-        state.counts[shape.type]++;
-        state.counts[NOT_DECIDED] -= SHAPE_SIZE;
-        for (auto &[rd, cd] : shape.tiles) {
-            state.cellType[r + rd][c + cd] = shape.type;
-            state.shapeID[r + rd][c + cd] = state.counts[shape.type];
-        }
-    }
-
-    void clearShape(Solution& state, const Shape& shape, const int r, const int c) const {
-        state.counts[shape.type]--;
-        state.counts[NOT_DECIDED] += SHAPE_SIZE;
-        for (auto &[rd, cd] : shape.tiles) {
-            state.cellType[r + rd][c + cd] = NOT_DECIDED;
-        }
-    }
-
-    [[nodiscard]] bool canPutShape(const Solution& state, const Shape& shape, const int r, const int c, const Type allowed) const {
-        for (auto &[rd, cd] : shape.tiles) {
-            const int rTile = r + rd;
-            const int cTile = c + cd;
-            if (rTile < 0 || rTile >= R || cTile < 0 || cTile >= C) return false;
-            if (state.cellType[rTile][cTile] != allowed) return false;
-        }
-        return true;
-    }
-
-    void checkMPIUpdates() {
-    thread_local int poll_counter = 0;
     
-    if (++poll_counter < 10000) return; 
-    poll_counter = 0;
+    void masterLogic() {
+        bestPriceShared = INT_MAX;
+        bestSolution.price = INT_MAX;
 
-    int flag;
-    MPI_Iprobe(0, TAG_NEW_BOUND, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
-    if (flag) {
-        int new_bound;
-        MPI_Recv(&new_bound, 1, MPI_INT, 0, TAG_NEW_BOUND, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        #pragma omp critical
+        Solution initialSolution;
+        initialSolution.init(R, C);
+        
+        queue<State> q;
+        q.push({initialSolution, {0, 0}});
+        vector<State> work;
+        const size_t ENOUGH_STATES = 30;
+
+        // BFS Generation
+        while (!q.empty() && q.size() + work.size() < ENOUGH_STATES) {
+            State current = q.front();
+            q.pop();
+            generateNextStatesBFS(current, q, work);
+        }
+        while (!q.empty()) {
+            work.push_back(q.front());
+            q.pop();
+        }
+
+        reverse(work.begin(), work.end());
+
+        int active_slaves = mpi_size - 1;
+        
+        while (active_slaves > 0) {
+            // cout << active_slaves << endl;
+            // cout << "work remaining: " <<  work.size() << endl;
+            MPI_Status status;
+            MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            int src = status.MPI_SOURCE;
+            int tag = status.MPI_TAG;
+
+            if (tag == TAG_REQUEST_WORK) {
+                MPI_Recv(nullptr, 0, MPI_BYTE, src, TAG_REQUEST_WORK, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                if (work.empty() || bestPriceShared == trivialBound) {
+                    MPI_Send(nullptr, 0, MPI_BYTE, src, TAG_TERMINATE, MPI_COMM_WORLD);
+                    // cout << "sending terminate" << endl;
+                } else {
+
+                    
+                    while (!work.empty() && work.back().sol.price >= bestPriceShared) {work.pop_back();}
+                    
+                    if(work.empty()){
+
+                        MPI_Send(nullptr, 0, MPI_BYTE, src, TAG_TERMINATE, MPI_COMM_WORLD);
+                    } else {
+                        State task = work.back(); work.pop_back();
+                    
+                        MPI_Send(&task, sizeof(State), MPI_BYTE, src, TAG_TASK, MPI_COMM_WORLD);
+                    }
+
+                }
+            } else if (tag == TAG_NEW_MIN) {
+                int reported_min;
+                MPI_Recv(&reported_min, 1, MPI_INT, src, TAG_NEW_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                if (reported_min < bestPriceShared) {
+                    bestPriceShared = reported_min;
+                    // cout << bestPriceShared << endl;
+                    // Rozeslání nového minima přes blokující Send
+                    for (int i = 1; i < mpi_size; i++) {
+                        if (i != src) {
+                            MPI_Send(&bestPriceShared, 1, MPI_INT, i, TAG_UPDATE_MIN, MPI_COMM_WORLD);
+                        }
+                    }
+                }
+            } else if(tag == TAG_RESULT) {
+                active_slaves--;
+                Solution sol;
+                MPI_Recv(&sol, sizeof(Solution), MPI_BYTE, src, TAG_RESULT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                // cout << "received solution " << sol.price << endl;
+                if (sol.price <= bestSolution.price) {
+                    bestSolution = sol;
+                }
+            } else {
+                cout << "Received unexpected message from a slave!" << endl;
+                exit(1);
+            }
+        }
+
+        print();
+    }
+
+    void slaveLogic() {
+        bestPriceShared = INT_MAX;
+        bestSolution.price = INT_MAX;
+
+        while (true) {
+            MPI_Send(nullptr, 0, MPI_BYTE, 0, TAG_REQUEST_WORK, MPI_COMM_WORLD);
+            
+            bool waiting_for_task = true;
+            while (waiting_for_task) {
+                MPI_Status status;
+                MPI_Probe(0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+                
+                if (status.MPI_TAG == TAG_TERMINATE) {
+                    MPI_Recv(nullptr, 0, MPI_BYTE, 0, TAG_TERMINATE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MPI_Send(&bestSolution, sizeof(Solution), MPI_BYTE, 0, TAG_RESULT, MPI_COMM_WORLD);
+                    // cout << "Sending solution " << bestSolution.price  << " at best shared min: " << bestPriceShared << endl;
+                    return; 
+                }
+                else if (status.MPI_TAG == TAG_TASK) {
+                    State task;
+                    MPI_Recv(&task, sizeof(State), MPI_BYTE, 0, TAG_TASK, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    
+                    slaveSolveParalell(task.p, task.sol);
+                    cout << "solved " << bestPriceShared << endl;
+                    waiting_for_task = false; 
+                }
+                else if (status.MPI_TAG == TAG_UPDATE_MIN) {
+                    int new_min;
+                    MPI_Recv(&new_min, 1, MPI_INT, 0, TAG_UPDATE_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            
+
+                    if (new_min < bestPriceShared) {
+                        bestPriceShared = new_min;
+                    }
+                }
+            }
+        }
+        
+    }
+
+
+
+    void slaveSolveParalell(Coordinates p, Solution current) {
+
+        #pragma omp parallel
         {
-            if (new_bound < bestPriceShared) bestPriceShared = new_bound;
+            #pragma omp single
+            {
+                solveRecursive(p, current, 0);
+            }
         }
     }
-}
 
-    void broadcastNewBoundSlave(int new_val) {
-        MPI_Request req;
-        MPI_Isend(&new_val, 1, MPI_INT, 0, TAG_NEW_BOUND, MPI_COMM_WORLD, &req);
-        MPI_Request_free(&req);
-    }
 
-    // Solvers
-    void solveAlmostSeq(Coordinates p, Solution current) {
-        checkMPIUpdates(); // MPI Polling
+    void solveRecursive(Coordinates p, Solution& current, int depth) {
 
         int currentBest;
         #pragma omp atomic read
         currentBest = bestPriceShared;
+
+        thread_local int calls = 0;
+        if ((++calls % 512) == 0) {
+            int flag = 0;
+            int new_min = INT_MAX;
+            #pragma omp critical (mpi_comm)
+            {
+                MPI_Iprobe(0, TAG_UPDATE_MIN, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+                if (flag) {
+                    MPI_Recv(&new_min, 1, MPI_INT, 0, TAG_UPDATE_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                }
+            }
+
+            if (new_min < currentBest) {
+                #pragma omp critical(update_best)
+                {
+                    if (new_min < bestPriceShared) {
+                        #pragma omp atomic write
+                        bestPriceShared = new_min;
+                    }
+                }
+            }
+        }
 
         if (current.price >= currentBest) return;
         if (currentBest == trivialBound) return;
@@ -204,9 +318,156 @@ private:
                     #pragma omp critical
                     {
                         if (current.price < bestPriceShared) {
+                            #pragma omp atomic write
+                            bestPriceShared = current.price;
+        
+                            bestSolution = current;
+                            MPI_Send(&bestPriceShared, 1, MPI_INT, 0, TAG_NEW_MIN, MPI_COMM_WORLD);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if (current.cellType[p.r][p.c] != NOT_DECIDED) {
+            solveRecursive(p.next(C), current, depth);
+            return;
+        }
+
+        if (depth < DEPTH_LIMIT) {
+            for (const auto& shape : ShapesUpperLeft) {
+                if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
+                    Solution nextState = current; 
+                    putShape(nextState, shape, p.r, p.c);
+                    
+                    #pragma omp task shared(bestSolution, bestPriceShared) firstprivate(nextState)
+                    {
+                        solveRecursive(p.next(C), nextState, depth + 1);
+                    }
+                }
+            }
+
+            Solution nextStateClear = current;
+            nextStateClear.cellType[p.r][p.c] = CLEAR;
+            bool valid = true;
+            for (const auto& shape : ShapesLowerRight) {
+                if (canPutShape(nextStateClear, shape, p.r, p.c, CLEAR)) {
+                    valid = false; break;
+                }
+            }
+            
+            if (valid) {
+                nextStateClear.counts[NOT_DECIDED]--;
+                nextStateClear.counts[CLEAR]++;
+                nextStateClear.price += prices[p.r][p.c];
+                
+                #pragma omp task shared(bestSolution, bestPriceShared) firstprivate(nextStateClear)
+                {
+                    solveRecursive(p.next(C), nextStateClear, depth + 1);
+                }
+            }
+            #pragma omp taskwait 
+        } else {
+            for (const auto& shape : ShapesUpperLeft) {
+                if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
+                    putShape(current, shape, p.r, p.c);
+                    solveRecursive(p.next(C), current, depth + 1);
+                    clearShape(current, shape, p.r, p.c);
+                }
+            }
+
+            current.cellType[p.r][p.c] = CLEAR;
+            bool valid = true;
+            for (const auto& shape : ShapesLowerRight) {
+                if (canPutShape(current, shape, p.r, p.c, CLEAR)) {
+                    valid = false; break;
+                }
+            }
+            if (valid) {
+                current.counts[NOT_DECIDED]--;
+                current.counts[CLEAR]++;
+                current.price += prices[p.r][p.c];
+                solveRecursive(p.next(C), current, depth + 1);
+                current.counts[NOT_DECIDED]++;
+                current.counts[CLEAR]--;
+                current.price -= prices[p.r][p.c];
+            }
+            current.cellType[p.r][p.c] = NOT_DECIDED;
+        }
+    }
+
+
+    void slaveSolveParalellOld(Coordinates p, Solution current) {        
+        // Sequence part - generating states using BFS
+        queue<State> q;
+        q.push({current, p});
+        vector<State> items;
+        const size_t ENOUGH_STATES = 5000;
+
+        while (!q.empty() && q.size() + items.size() < ENOUGH_STATES) {
+            State current = q.front();
+            q.pop();
+            generateNextStatesBFS(current, q, items);
+        }
+        while (!q.empty()) {
+            items.push_back(q.front());
+            q.pop();
+        }
+
+        int is = items.size();
+        
+        // Data paralelism
+        #pragma omp parallel for schedule(dynamic)
+        for (int i = 0; i < is; i++) {
+            solveAlmostSeq(items[i].p, items[i].sol);
+        }
+        // cout << "solved" << endl;
+    }
+
+    void solveAlmostSeq(Coordinates p, Solution current) {
+        int currentBest;
+        #pragma omp atomic read
+        currentBest = bestPriceShared;
+
+
+        // thread_local int calls = 0;
+        // if ((++calls % 64) == 0) {
+        //     int flag = 0;
+        //     int new_min = INT_MAX;
+        //     #pragma omp critical (mpi_comm)
+        //     {
+        //         MPI_Iprobe(0, TAG_UPDATE_MIN, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+        //         if (flag) {
+        //             MPI_Recv(&new_min, 1, MPI_INT, 0, TAG_UPDATE_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        //         }
+        //     }
+
+        //     if (new_min < currentBest) {
+        //         #pragma omp critical(update_best)
+        //         {
+        //             if (new_min < bestPriceShared) {
+        //                 #pragma omp atomic write
+        //                 bestPriceShared = new_min;
+        //             }
+        //         }
+        //     }
+        // }
+
+        if (current.price >= currentBest) return;
+        if (currentBest == trivialBound) return;
+        if (abs(current.counts[Z] - current.counts[T]) - 1 > current.counts[NOT_DECIDED] / 4) return;
+
+        if (p.r >= R) {
+            if (abs(current.counts[Z] - current.counts[T]) <= 1) {
+                if (current.price < currentBest) {
+                    #pragma omp critical(update_best)
+                    {
+                        if (current.price < bestPriceShared) {
+                            #pragma omp atomic write
                             bestPriceShared = current.price;
                             bestSolution = current;
-                            broadcastNewBoundSlave(current.price);
+                            // MPI_Send(&bestPriceShared, 1, MPI_INT, 0, TAG_NEW_MIN, MPI_COMM_WORLD);
                         }
                     }
                 }
@@ -246,78 +507,7 @@ private:
         current.cellType[p.r][p.c] = NOT_DECIDED;
     }
 
-    void solveRecursiveTask(Coordinates p, Solution& current, int depth) {
-        checkMPIUpdates(); // MPI Polling
-
-        int currentBest;
-        #pragma omp atomic read
-        currentBest = bestPriceShared;
-
-        if (current.price >= currentBest) return;
-        if (currentBest == trivialBound) return;
-        if (abs(current.counts[Z] - current.counts[T]) - 1 > current.counts[NOT_DECIDED] / 4) return;
-
-        if (p.r >= R) {
-            if (abs(current.counts[Z] - current.counts[T]) <= 1) {
-                if (current.price < currentBest) {
-                    #pragma omp critical
-                    {
-                        if (current.price < bestPriceShared) {
-                            bestPriceShared = current.price;
-                            bestSolution = current;
-                            broadcastNewBoundSlave(current.price);
-                        }
-                    }
-                }
-            }
-            return;
-        }
-
-        if (current.cellType[p.r][p.c] != NOT_DECIDED) {
-            solveRecursiveTask(p.next(C), current, depth);
-            return;
-        }
-
-        if (depth < DEPTH_LIMIT) {
-            for (const auto& shape : ShapesUpperLeft) {
-                if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
-                    Solution nextState = current; 
-                    putShape(nextState, shape, p.r, p.c);
-                    
-                    #pragma omp task shared(bestPriceShared) firstprivate(nextState)
-                    {
-                        solveRecursiveTask(p.next(C), nextState, depth + 1);
-                    }
-                }
-            }
-
-            Solution nextStateClear = current;
-            nextStateClear.cellType[p.r][p.c] = CLEAR;
-            bool valid = true;
-            for (const auto& shape : ShapesLowerRight) {
-                if (canPutShape(nextStateClear, shape, p.r, p.c, CLEAR)) {
-                    valid = false; break;
-                }
-            }
-            
-            if (valid) {
-                nextStateClear.counts[NOT_DECIDED]--;
-                nextStateClear.counts[CLEAR]++;
-                nextStateClear.price += prices[p.r][p.c];
-                
-                #pragma omp task shared(bestPriceShared) firstprivate(nextStateClear)
-                {
-                    solveRecursiveTask(p.next(C), nextStateClear, depth + 1);
-                }
-            }
-            #pragma omp taskwait 
-        } else {
-            // Fallback na sekvenční s OMP prořezáváním
-            solveAlmostSeq(p, current); 
-        }
-    }
-
-    void generateNextStatesBFS(State current, queue<State>& q, vector<State>& items, size_t limit) {
+    void generateNextStatesBFS(State current, queue<State>& q, vector<State>& items) {
         Coordinates p = current.p;
         while (p.r < R && current.sol.cellType[p.r][p.c] != NOT_DECIDED) {
             p = p.next(C);
@@ -355,147 +545,32 @@ private:
         }
     }
 
-    void masterRoutine() {
-        bestSolution.price = INT_MAX;
-        bestPriceShared = INT_MAX;
 
-        Solution initialSolution;
-        initialSolution.init(R, C);
-        
-        queue<State> q;
-        q.push({initialSolution, {0, 0}});
-        vector<State> work_items;
-        
-        const size_t ENOUGH_STATES = mpi_size * 100;
-
-        while (!q.empty() && q.size() + work_items.size() < ENOUGH_STATES) {
-            State current = q.front();
-            q.pop();
-            generateNextStatesBFS(current, q, work_items, ENOUGH_STATES);
+    void putShape(Solution& state, const Shape& shape, const int r, const int c) const {
+        state.counts[shape.type]++;
+        state.counts[NOT_DECIDED] -= SHAPE_SIZE;
+        for (auto &[rd, cd] : shape.tiles) {
+            state.cellType[r + rd][c + cd] = shape.type;
+            state.shapeID[r + rd][c + cd] = state.counts[shape.type];
         }
-        while (!q.empty()) {
-            work_items.push_back(q.front());
-            q.pop();
-        }
-
-        queue<int> idle_slaves;
-        for (int i = 1; i < mpi_size; i++) idle_slaves.push(i);
-        int active_workers = 0;
-        size_t tasks_sent = 0;
-
-        while (tasks_sent < work_items.size() || active_workers > 0) {
-            while (tasks_sent < work_items.size() && !idle_slaves.empty()) {
-                int dest = idle_slaves.front();
-                idle_slaves.pop();
-                
-                MPI_Send(&work_items[tasks_sent], sizeof(State), MPI_BYTE, dest, TAG_WORK, MPI_COMM_WORLD);
-                MPI_Send(&bestPriceShared, 1, MPI_INT, dest, TAG_NEW_BOUND, MPI_COMM_WORLD);
-                tasks_sent++;
-                active_workers++;
-            }
-
-            if (active_workers > 0) {
-                MPI_Status status;
-                MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-
-                if (status.MPI_TAG == TAG_RESULT) {
-                    WorkResult res;
-                    MPI_Recv(&res, sizeof(WorkResult), MPI_BYTE, status.MPI_SOURCE, TAG_RESULT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    
-                    if (res.best_price < bestPriceShared) {
-                        bestPriceShared = res.best_price;
-                        bestSolution = res.best_sol;
-                    }
-                    active_workers--;
-                    idle_slaves.push(status.MPI_SOURCE);
-                    
-                } else if (status.MPI_TAG == TAG_NEW_BOUND) {
-                    int new_bound;
-                    MPI_Recv(&new_bound, 1, MPI_INT, status.MPI_SOURCE, TAG_NEW_BOUND, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    
-                    if (new_bound < bestPriceShared) {
-                        bestPriceShared = new_bound;
-                        for (int i = 1; i < mpi_size; i++) {
-                            if (i != status.MPI_SOURCE) {
-                                MPI_Request req;
-                                MPI_Isend(&bestPriceShared, 1, MPI_INT, i, TAG_NEW_BOUND, MPI_COMM_WORLD, &req);
-                                MPI_Request_free(&req);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        for (int i = 1; i < mpi_size; i++) {
-            int dummy = 0;
-            MPI_Send(&dummy, 1, MPI_INT, i, TAG_KILL, MPI_COMM_WORLD);
-        }
-        print();
     }
 
-    void slaveRoutine() {
-        bool konec = false;
-        
-        const bool USE_TASK_PARALLELISM = true; 
-
-        while (!konec) {
-            MPI_Status status;
-            MPI_Probe(0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-
-            if (status.MPI_TAG == TAG_KILL) {
-                int dummy;
-                MPI_Recv(&dummy, 1, MPI_INT, 0, TAG_KILL, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                konec = true;
-                
-            } else if (status.MPI_TAG == TAG_NEW_BOUND) {
-                int b;
-                MPI_Recv(&b, 1, MPI_INT, 0, TAG_NEW_BOUND, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                if (b < bestPriceShared) bestPriceShared = b;
-                
-            } else if (status.MPI_TAG == TAG_WORK) {
-                State s;
-                MPI_Recv(&s, sizeof(State), MPI_BYTE, 0, TAG_WORK, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                MPI_Recv(&bestPriceShared, 1, MPI_INT, 0, TAG_NEW_BOUND, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                
-                bestSolution.price = INT_MAX;
-
-                if (USE_TASK_PARALLELISM) {
-                    #pragma omp parallel shared(bestPriceShared)
-                    {
-                        #pragma omp single
-                        {
-                            solveRecursiveTask(s.p, s.sol, 0);
-                        }
-                    }
-                } else {
-                    queue<State> local_q;
-                    local_q.push(s);
-                    vector<State> local_items;
-                    
-                    while (!local_q.empty() && local_q.size() + local_items.size() < 500) {
-                        State curr = local_q.front();
-                        local_q.pop();
-                        generateNextStatesBFS(curr, local_q, local_items, 500);
-                    }
-                    while (!local_q.empty()) {
-                        local_items.push_back(local_q.front());
-                        local_q.pop();
-                    }
-
-                    int is = local_items.size();
-                    #pragma omp parallel for schedule(dynamic) shared(bestPriceShared)
-                    for (int i = 0; i < is; i++) {
-                        solveAlmostSeq(local_items[i].p, local_items[i].sol);
-                    }
-                }
-
-                WorkResult res;
-                res.best_price = bestSolution.price;
-                res.best_sol = bestSolution;
-                MPI_Send(&res, sizeof(WorkResult), MPI_BYTE, 0, TAG_RESULT, MPI_COMM_WORLD);
-            }
+    void clearShape(Solution& state, const Shape& shape, const int r, const int c) const {
+        state.counts[shape.type]--;
+        state.counts[NOT_DECIDED] += SHAPE_SIZE;
+        for (auto &[rd, cd] : shape.tiles) {
+            state.cellType[r + rd][c + cd] = NOT_DECIDED;
         }
+    }
+
+    [[nodiscard]] bool canPutShape(const Solution& state, const Shape& shape, const int r, const int c, const Type allowed) const {
+        for (auto &[rd, cd] : shape.tiles) {
+            const int rTile = r + rd;
+            const int cTile = c + cd;
+            if (rTile < 0 || rTile >= R || cTile < 0 || cTile >= C) return false;
+            if (state.cellType[rTile][cTile] != allowed) return false;
+        }
+        return true;
     }
 
     void print() const {
@@ -515,12 +590,11 @@ private:
     }
 };
 
-int main(int argc, char** argv) {
+int main(int argc, char* argv[]) {
     int provided;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-
     if (provided < MPI_THREAD_MULTIPLE) {
-        std::cerr << "FATAL: MPI implementation does not support multithreading." << std::endl;
+        cerr << "Error: MPI does not support multithreading." << endl;
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
@@ -530,20 +604,23 @@ int main(int argc, char** argv) {
 
     Solver solver(rank, size);
     
-   
-    bool ok = false;
-    if (rank == 0) {
-        ok = solver.read();
-    }
-    MPI_Bcast(&ok, 1, MPI_CXX_BOOL, 0, MPI_COMM_WORLD);
-    
-    if (ok) {
-        MPI_Bcast(&solver, sizeof(Solver), MPI_BYTE, 0, MPI_COMM_WORLD);
-        // Refresh rank and size after Bcast - they were overwritten
-        solver.mpi_rank = rank;
-        solver.mpi_size = size;
-        
-        solver.run();
+    if (solver.read()) {
+        solver.broadcastParams();
+
+        // Synchronizace a začátek měření
+        MPI_Barrier(MPI_COMM_WORLD);
+        double start_time = MPI_Wtime();
+
+        solver.solve();
+
+        // Synchronizace a konec měření
+        MPI_Barrier(MPI_COMM_WORLD);
+        double end_time = MPI_Wtime();
+
+        // Výpis času pouze z hlavního vlákna
+        if (rank == 0) {
+            cout << "Cas behu: " << (end_time - start_time) << " sekund" << endl;
+        }
     }
 
     MPI_Finalize();
