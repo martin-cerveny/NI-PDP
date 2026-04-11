@@ -129,7 +129,13 @@ public:
         // Data paralelism
         #pragma omp parallel for schedule(dynamic)
         for (int i = 0; i < is; i++) {
-            solveAlmostSeq(items[i].p, items[i].sol);
+            int currentBestLoop;
+            #pragma omp atomic read relaxed
+            currentBestLoop = bestPriceShared;
+
+            if (currentBestLoop == trivialBound) continue;
+            Solution localSol = items[i].sol;
+            solveAlmostSeq(items[i].p, localSol);
         }
     }
 
@@ -223,9 +229,9 @@ private:
         }
     }
 
-    void solveAlmostSeq(Coordinates p, Solution current) {
+    void solveAlmostSeq(Coordinates p, Solution& current) {
         int currentBest;
-        #pragma omp atomic read
+        #pragma omp atomic read relaxed
         currentBest = bestPriceShared;
 
         if (current.price >= currentBest) return;
