@@ -159,9 +159,15 @@ private:
         {T, {{-1, -1}, {0, -1}, {0, 0}, {1, -1}}}
     };
 
-    Coordinates nextPosition(const Coordinates& position) const {
-        if (position.c + 1 >= C) return {position.r + 1, 0};
-        return {position.r, position.c + 1};
+    Coordinates nextNotDecidedPosition(Coordinates position, const Solution& solution) const {
+        while (position.r < R && solution.type(position) != NOT_DECIDED) {
+            position.c++;
+            if (position.c >= C) {
+                position.r++;
+                position.c = 0;
+            }
+        }
+        return position;
     }
 
     static void putShape(Node& node, const Shape& shape, const int r, const int c) {
@@ -179,7 +185,6 @@ private:
             node.solution.type(r + rd, c + cd) = NOT_DECIDED;
         }
     }
-
 
     bool canPutShape(const Node& node, const Shape& shape, const int r, const int c, const CellType allowed) const {
         for (auto &[rd, cd] : shape.tiles) {
@@ -215,28 +220,22 @@ private:
     }
 
     void generateNextStatesBFS(Node current, Coordinates p, queue<WorkData>& q, vector<WorkData>& items) {
-        while (p.r < R && current.type(p) != NOT_DECIDED) {
-            p = nextPosition(p);
-        }
-
         if (p.r >= R) {
             items.push_back({current, p});
             return;
         }
 
-        Coordinates nextP = nextPosition(p);
-
         for (const auto& shape : ShapesUpperLeft) {
             if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
                 Node nextNode = current;
                 putShape(nextNode, shape, p.r, p.c);
-                q.push({nextNode, nextP});
+                q.push({nextNode, nextNotDecidedPosition(p, nextNode.solution)});
             }
         }
 
         Node nextStateClear = current;
         if (tryPutClear(nextStateClear, p)) {
-            q.push({nextStateClear, nextP});
+            q.push({nextStateClear, nextNotDecidedPosition(p, nextStateClear.solution)});
         }
     }
 
@@ -264,23 +263,16 @@ private:
             return;
         }
 
-        if (current.type(p) != NOT_DECIDED) {
-            solveAlmostSeq(nextPosition(p), current);
-            return;
-        }
-
-        const Coordinates nextP = nextPosition(p);
-
         for (const auto& shape : ShapesUpperLeft) {
             if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
                 putShape(current, shape, p.r, p.c);
-                solveAlmostSeq(nextP, current);
+                solveAlmostSeq(nextNotDecidedPosition(p, current.solution), current);
                 removeShape(current, shape, p.r, p.c);
             }
         }
 
         if (tryPutClear(current, p)) {
-            solveAlmostSeq(nextP, current);
+            solveAlmostSeq(nextNotDecidedPosition(p, current.solution), current);
             removeClear(current, p);
         }
     }
