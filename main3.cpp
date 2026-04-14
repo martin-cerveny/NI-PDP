@@ -8,71 +8,55 @@
 
 using namespace std;
 
-#define MAX_ROWS 20
-#define MAX_COLS 20
+constexpr int MAX_ROWS =  20;
+constexpr int MAX_COLS = 20;
 constexpr int SHAPE_SIZE = 4;
+constexpr int ENOUGH_STATES = 6000;
 
-enum Type { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES };
+enum CellType { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES };
 
-class TilePosition {
-public:
+struct  Coordinates {
     int r, c;
 };
 
-class Shape {
+struct Shape {
+    CellType type;
+    Coordinates tiles[SHAPE_SIZE];
+};
+
+struct CellState {
+    CellType type = NOT_DECIDED;
+    int id = 0;
+};
+
+struct Solution {
+    CellState boardState[MAX_ROWS][MAX_COLS]{};
+
+    inline CellType& type(int r, int c) { return boardState[r][c].type; }
+    inline CellType type(int r, int c) const { return boardState[r][c].type; }
+    inline CellType& type(Coordinates p) { return boardState[p.r][p.c].type; }
+    inline CellType type(Coordinates p) const { return boardState[p.r][p.c].type; }
+};
+
+class Node {
 public:
-    Type type;
-    TilePosition tiles[SHAPE_SIZE];
-};
-
-constexpr Shape ShapesUpperLeft[] = {
-    {T, {{0, 0}, {1, -1}, {1, 0}, {1, 1}}},
-    {T, {{0, 0}, {1, -1}, {1, 0}, {2, 0}}},
-    {T, {{0, 0}, {0, 1}, {0, 2}, {1, 1}}},
-    {T, {{0, 0}, {1, 0}, {1, 1}, {2, 0}}},
-    {Z, {{0,0}, {0,1}, {1, -1}, {1, 0}}},
-    {Z, {{0,0}, {0, 1}, {1, 1}, {1, 2}}},
-    {Z, {{0,0}, {1,-1}, {1, 0}, {2, -1}}},
-    {Z, {{0,0}, {1,0}, {1, 1}, {2, 1}}},
-};
-
-constexpr Shape ShapesLowerRight[] = {
-    {Z, {{-1, -2}, {-1, -1}, {0, -1}, {0, 0}}},
-    {Z, {{-1, 0}, {0, -1}, {0, 0}, {1, -1}}},
-    {Z, {{0, -1}, {0, 0}, {1, -2}, {1, -1}}},
-    {Z, {{-2, -1}, {-1, -1}, {-1, 0}, {0, 0}}},
-    {T, {{0, -2}, {0, -1}, {0, 0}, {1, -1}}},
-    {T, {{-2, 0}, {-1, -1}, {-1, 0}, {0, 0}}},
-    {T, {{-1, -1}, {0, -2}, {0, -1}, {0, 0}}},
-    {T, {{-1, -1}, {0, -1}, {0, 0}, {1, -1}}}
-};
-
-class Solution {
-public:
-    int price;
-    int shapeID[MAX_ROWS][MAX_COLS];
-    int counts[COUNT_OF_TYPES];
-    Type cellType[MAX_ROWS][MAX_COLS];
-
-
-    Solution() {
-        price = 0;
-        for (int &count : counts) count = 0;
-        for (int r = 0; r < MAX_ROWS; r++) {
-            for (int c = 0; c < MAX_COLS; c++) {
-                shapeID[r][c] = 0;
-                cellType[r][c] = NOT_DECIDED;
-            }
-        }
-    }
-    void init(const int R, const int C) {
-        counts[NOT_DECIDED] = R * C;
-    }
-};
-
-struct State {
+    int price = 0;
+    int quatrominoCntPerType[COUNT_OF_TYPES]{};
     Solution solution;
-    TilePosition p;
+
+    Node(const int R, const int C) {
+        quatrominoCntPerType[NOT_DECIDED] = R * C;
+    }
+
+    inline CellType type(int r, int c) const { return solution.type(r, c); }
+    inline CellType type(Coordinates p) const { return solution.type(p); }
+    inline void setType(Coordinates p, CellType t) { solution.type(p) = t; }
+    inline void setCell(int r, int c, CellType t, int id) { solution.boardState[r][c] = {t, id}; }
+};
+
+struct WorkData {
+    Node node;
+    Coordinates p;
 };
 
 class Solver {
@@ -83,8 +67,8 @@ public:
         vector<int> allPrices(R*C);
         for (int r = 0, idx = 0; r < R; r++) {
             for (int c = 0; c < C; c++) {
-                if (!(cin >> prices[r][c])) return false;
-                allPrices[idx] = prices[r][c];
+                if (!(cin >> pricesAssignment[r][c])) return false;
+                allPrices[idx] = pricesAssignment[r][c];
                 idx++;
             }
         }
@@ -97,159 +81,182 @@ public:
         }
         return true;
     }
-    
+
     void solve() {
-        bestSolution.price = INT_MAX;
         bestPriceShared = INT_MAX;
+        Node initialSolution(R, C);
 
-        Solution initialSolution;
-        initialSolution.init(R, C);
-        
-        // Sequence part - generating states using BFS
-        queue<State> q;
-        q.push({initialSolution, {0, 0}});
-        vector<State> items;
-        const size_t ENOUGH_STATES = 5000;
+        queue<WorkData> bfsQueue;
+        bfsQueue.push({initialSolution, {0, 0}});
+        vector<WorkData> work;
 
-        while (!q.empty() && q.size() + items.size() < ENOUGH_STATES) {
-            State current = q.front();
-            q.pop();
-            generateNextStatesBFS(current, q, items);
+        while (!bfsQueue.empty() && bfsQueue.size() + work.size() < ENOUGH_STATES) {
+            auto [node, p] = bfsQueue.front();
+            bfsQueue.pop();
+            generateNextStatesBFS(node, p, bfsQueue, work);
         }
-        while (!q.empty()) {
-            items.push_back(q.front());
-            q.pop();
+        while (!bfsQueue.empty()) {
+            work.push_back(bfsQueue.front());
+            bfsQueue.pop();
         }
 
-        int is = items.size();
-        
-        // Data paralelism
+        const int workSize = work.size();
+
         #pragma omp parallel for schedule(dynamic)
-        for (int i = 0; i < is; i++) {
+        for (int i = 0; i < workSize; i++) {
             int currentBestLoop;
             #pragma omp atomic read relaxed
             currentBestLoop = bestPriceShared;
 
             if (currentBestLoop == trivialBound) continue;
-            Solution localSol = items[i].solution;
-            solveAlmostSeq(items[i].p, localSol);
+
+            solveAlmostSeq(work[i].p, work[i].node);
         }
     }
-
     void print() const {
         for (int r = 0; r < R; r++) {
             for (int c = 0; c < C; c++) {
-                switch (bestSolution.cellType[r][c]) {
-                    case CLEAR: cout << prices[r][c]; break;
-                    case Z: cout << 'Z' << bestSolution.shapeID[r][c]; break;
-                    case T: cout << 'T' << bestSolution.shapeID[r][c]; break;
+                switch (bestSolution.boardState[r][c].type) {
+                    case CLEAR: cout << pricesAssignment[r][c]; break;
+                    case Z: cout << 'Z' << bestSolution.boardState[r][c].id; break;
+                    case T: cout << 'T' << bestSolution.boardState[r][c].id; break;
                     default: cout << '?'; break;
                 }
                 cout << '\t';
             }
             cout << endl;
         }
-        cout << bestSolution.price << endl;
+        cout << bestPriceShared << endl;
     }
 
 private:
     int R = 0;
     int C = 0;
-    int trivialBound = 0;
-    int prices[MAX_ROWS][MAX_COLS];
-    
-    Solution bestSolution;
     int bestPriceShared = INT_MAX;
+    int trivialBound = 0;
+    int pricesAssignment[MAX_ROWS][MAX_COLS]{};
+    Solution bestSolution;
 
+    static constexpr Shape ShapesUpperLeft[] = {
+        {T, {{0, 0}, {1, -1}, {1, 0}, {1, 1}}},
+        {T, {{0, 0}, {1, -1}, {1, 0}, {2, 0}}},
+        {T, {{0, 0}, {0, 1}, {0, 2}, {1, 1}}},
+        {T, {{0, 0}, {1, 0}, {1, 1}, {2, 0}}},
+        {Z, {{0,0}, {0,1}, {1, -1}, {1, 0}}},
+        {Z, {{0,0}, {0, 1}, {1, 1}, {1, 2}}},
+        {Z, {{0,0}, {1,-1}, {1, 0}, {2, -1}}},
+        {Z, {{0,0}, {1,0}, {1, 1}, {2, 1}}},
+    };
 
-    TilePosition nextPosition(const TilePosition& p) const {
-        if (p.c + 1 >= C) return {p.r + 1, 0};
-        return {p.r, p.c + 1};
+    static constexpr Shape ShapesLowerRight[] = {
+        {Z, {{-1, -2}, {-1, -1}, {0, -1}, {0, 0}}},
+        {Z, {{-1, 0}, {0, -1}, {0, 0}, {1, -1}}},
+        {Z, {{0, -1}, {0, 0}, {1, -2}, {1, -1}}},
+        {Z, {{-2, -1}, {-1, -1}, {-1, 0}, {0, 0}}},
+        {T, {{0, -2}, {0, -1}, {0, 0}, {1, -1}}},
+        {T, {{-2, 0}, {-1, -1}, {-1, 0}, {0, 0}}},
+        {T, {{-1, -1}, {0, -2}, {0, -1}, {0, 0}}},
+        {T, {{-1, -1}, {0, -1}, {0, 0}, {1, -1}}}
+    };
+
+    Coordinates nextPosition(const Coordinates& position) const {
+        if (position.c + 1 >= C) return {position.r + 1, 0};
+        return {position.r, position.c + 1};
     }
 
-    void putShape(Solution& state, const Shape& shape, const int r, const int c) const {
-        state.counts[shape.type]++;
-        state.counts[NOT_DECIDED] -= SHAPE_SIZE;
+    static void putShape(Node& node, const Shape& shape, const int r, const int c) {
+        node.quatrominoCntPerType[shape.type]++;
+        node.quatrominoCntPerType[NOT_DECIDED] -= SHAPE_SIZE;
         for (auto &[rd, cd] : shape.tiles) {
-            state.cellType[r + rd][c + cd] = shape.type;
-            state.shapeID[r + rd][c + cd] = state.counts[shape.type];
+            node.setCell(r + rd, c + cd, shape.type, node.quatrominoCntPerType[shape.type]);
         }
     }
 
-    void clearShape(Solution& state, const Shape& shape, const int r, const int c) const {
-        state.counts[shape.type]--;
-        state.counts[NOT_DECIDED] += SHAPE_SIZE;
+    static void removeShape(Node& node, const Shape& shape, const int r, const int c) {
+        node.quatrominoCntPerType[shape.type]--;
+        node.quatrominoCntPerType[NOT_DECIDED] += SHAPE_SIZE;
         for (auto &[rd, cd] : shape.tiles) {
-            state.cellType[r + rd][c + cd] = NOT_DECIDED;
+            node.solution.type(r + rd, c + cd) = NOT_DECIDED;
         }
     }
 
-    [[nodiscard]] bool canPutShape(const Solution& state, const Shape& shape, const int r, const int c, const Type allowed) const {
+
+    bool canPutShape(const Node& node, const Shape& shape, const int r, const int c, const CellType allowed) const {
         for (auto &[rd, cd] : shape.tiles) {
             const int rTile = r + rd;
             const int cTile = c + cd;
             if (rTile < 0 || rTile >= R || cTile < 0 || cTile >= C) return false;
-            if (state.cellType[rTile][cTile] != allowed) return false;
+            if (node.type(rTile, cTile) != allowed) return false;
         }
         return true;
     }
 
-    void generateNextStatesBFS(State current, queue<State>& q, vector<State>& items) {
-        TilePosition p = current.p;
-        while (p.r < R && current.solution.cellType[p.r][p.c] != NOT_DECIDED) {
+    bool tryPutClear(Node& node, Coordinates p) const {
+        node.setType(p, CLEAR);
+
+        for (const auto& shape : ShapesLowerRight) {
+            if (canPutShape(node, shape, p.r, p.c, CLEAR)) {
+                node.setType(p, NOT_DECIDED);
+                return false;
+            }
+        }
+
+        node.quatrominoCntPerType[NOT_DECIDED]--;
+        node.quatrominoCntPerType[CLEAR]++;
+        node.price += pricesAssignment[p.r][p.c];
+        return true;
+    }
+
+    void removeClear(Node& node, Coordinates p) const {
+        node.setType(p, NOT_DECIDED);
+        node.quatrominoCntPerType[NOT_DECIDED]++;
+        node.quatrominoCntPerType[CLEAR]--;
+        node.price -= pricesAssignment[p.r][p.c];
+    }
+
+    void generateNextStatesBFS(Node current, Coordinates p, queue<WorkData>& q, vector<WorkData>& items) {
+        while (p.r < R && current.type(p) != NOT_DECIDED) {
             p = nextPosition(p);
         }
 
         if (p.r >= R) {
-            current.p = p;
-            items.push_back(current);
+            items.push_back({current, p});
             return;
         }
 
+        Coordinates nextP = nextPosition(p);
+
         for (const auto& shape : ShapesUpperLeft) {
-            if (canPutShape(current.solution, shape, p.r, p.c, NOT_DECIDED)) {
-                State nextState = current;
-                putShape(nextState.solution, shape, p.r, p.c);
-                nextState.p = nextPosition(p);
-                q.push(nextState);
+            if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
+                Node nextNode = current;
+                putShape(nextNode, shape, p.r, p.c);
+                q.push({nextNode, nextP});
             }
         }
 
-        State nextStateClear = current;
-        nextStateClear.solution.cellType[p.r][p.c] = CLEAR;
-        bool valid = true;
-        for (const auto& shape : ShapesLowerRight) {
-            if (canPutShape(nextStateClear.solution, shape, p.r, p.c, CLEAR)) {
-                valid = false; break;
-            }
-        }
-        if (valid) {
-            nextStateClear.solution.counts[NOT_DECIDED]--;
-            nextStateClear.solution.counts[CLEAR]++;
-            nextStateClear.solution.price += prices[p.r][p.c];
-            nextStateClear.p = nextPosition(p);
-            q.push(nextStateClear);
+        Node nextStateClear = current;
+        if (tryPutClear(nextStateClear, p)) {
+            q.push({nextStateClear, nextP});
         }
     }
 
-    void solveAlmostSeq(TilePosition p, Solution& current) {
+    void solveAlmostSeq(Coordinates p, Node& current) {
         int currentBest;
         #pragma omp atomic read relaxed
         currentBest = bestPriceShared;
 
-        if (current.price >= currentBest) return;
-        if (currentBest == trivialBound) return;
-        if (abs(current.counts[Z] - current.counts[T]) - 1 > current.counts[NOT_DECIDED] / 4) return;
+        if (current.price >= currentBest || currentBest == trivialBound) return;
+        if (abs(current.quatrominoCntPerType[Z] - current.quatrominoCntPerType[T]) - 1 > current.quatrominoCntPerType[NOT_DECIDED] / 4) return;
 
         if (p.r >= R) {
-            if (abs(current.counts[Z] - current.counts[T]) <= 1) {
+            if (abs(current.quatrominoCntPerType[Z] - current.quatrominoCntPerType[T]) <= 1) {
                 if (current.price < currentBest) {
                     #pragma omp critical
                     {
                         if (current.price < bestPriceShared) {
                             #pragma omp atomic write
                             bestPriceShared = current.price;
-                            bestSolution = current;
+                            bestSolution = current.solution;
                         }
                     }
                 }
@@ -257,36 +264,25 @@ private:
             return;
         }
 
-        if (current.cellType[p.r][p.c] != NOT_DECIDED) {
+        if (current.type(p) != NOT_DECIDED) {
             solveAlmostSeq(nextPosition(p), current);
             return;
         }
 
+        const Coordinates nextP = nextPosition(p);
+
         for (const auto& shape : ShapesUpperLeft) {
             if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
                 putShape(current, shape, p.r, p.c);
-                solveAlmostSeq(nextPosition(p), current);
-                clearShape(current, shape, p.r, p.c);
+                solveAlmostSeq(nextP, current);
+                removeShape(current, shape, p.r, p.c);
             }
         }
 
-        current.cellType[p.r][p.c] = CLEAR;
-        bool valid = true;
-        for (const auto& shape : ShapesLowerRight) {
-            if (canPutShape(current, shape, p.r, p.c, CLEAR)) {
-                valid = false; break;
-            }
+        if (tryPutClear(current, p)) {
+            solveAlmostSeq(nextP, current);
+            removeClear(current, p);
         }
-        if (valid) {
-            current.counts[NOT_DECIDED]--;
-            current.counts[CLEAR]++;
-            current.price += prices[p.r][p.c];
-            solveAlmostSeq(nextPosition(p), current);
-            current.counts[NOT_DECIDED]++;
-            current.counts[CLEAR]--;
-            current.price -= prices[p.r][p.c];
-        }
-        current.cellType[p.r][p.c] = NOT_DECIDED;
     }
 };
 
