@@ -3,18 +3,18 @@
 #include <cmath>
 #include <algorithm>
 #include <climits>
-
+#include <chrono>
 using namespace std;
 
 constexpr int SHAPE_SIZE = 4;
 
 enum Type { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES};
 
-class Coordinates {
+class TilePosition {
 public:
     int r, c;
 	
-    [[nodiscard]] Coordinates next(const int cols) const {
+    [[nodiscard]] TilePosition next(const int cols) const {
         if (c+1 >= cols) {
             return {r + 1, 0};
         }
@@ -25,7 +25,7 @@ public:
 class Shape {
 public:
     Type type;
-    Coordinates tiles[SHAPE_SIZE];
+    TilePosition tiles[SHAPE_SIZE];
 };
 
 constexpr Shape ShapesUpperLeft[] = {
@@ -53,14 +53,14 @@ constexpr Shape ShapesLowerRight[] = {
 };
 
 
-class Solution {
+class Board {
 public:
     int price;
     vector<vector<int>> shapeID;
     vector<vector<Type>> cellType;
     int counts[COUNT_OF_TYPES]{};
 
-    Solution(const int R, const int C)
+    Board(const int R, const int C)
     : price(0), shapeID(R, vector<int>(C, 0)), cellType(R, vector<Type>(C, NOT_DECIDED)) {
         for (auto& count: counts) {
             count = 0;
@@ -95,8 +95,8 @@ public:
         return true;
     }
     void solve() {
-        currentSolution = Solution(R, C);
-        bestSolution = Solution(R, C);
+        currentSolution = Board(R, C);
+        bestSolution = Board(R, C);
         bestSolution.price = INT_MAX;
         currentSolution.price = 0;
         solveRecursive({0, 0});
@@ -123,8 +123,8 @@ private:
     int totalCalls = 0;
     int trivialBound = 0;
     vector<vector<int>> prices;
-    Solution currentSolution = Solution(0,0);
-    Solution bestSolution = Solution(0,0);
+    Board currentSolution = Board(0,0);
+    Board bestSolution = Board(0,0);
     
     void putShape(const Shape& shape, const int r, const int c) {
         currentSolution.counts[shape.type]++;
@@ -167,7 +167,7 @@ private:
 
     }
 
-    void solveRecursive(Coordinates p) {
+    void solveRecursive(TilePosition p) {
         totalCalls++;
         if (currentSolution.price >= bestSolution.price) return;
         if (bestSolution.price == trivialBound) return;
@@ -223,14 +223,18 @@ private:
 
 };
 
-
 int main() {
-
     Solver solver;
-    solver.read();
-    solver.solve();
-    solver.print();
+    if (solver.read()) {
 
+
+        auto start_time = std::chrono::steady_clock::now();
+        solver.solve();
+
+        auto end_time = std::chrono::steady_clock::now();
+        solver.print();
+        std::chrono::duration<double> elapsed = end_time - start_time;
+        cout << "Cas behu: " << elapsed.count() << " sekund" << endl;
+    }
     return 0;
-
 }

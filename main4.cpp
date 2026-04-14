@@ -9,13 +9,13 @@
 
 using namespace std;
 
-#define MAX_ROWS 20
-#define MAX_COLS 20
+constexpr int MAX_ROWS = 20;
+constexpr int MAX_COLS = 20;
 constexpr int SHAPE_SIZE = 4;
+constexpr int MASTER_ENOUGH_STATES = 30;
+constexpr int SLAVE_ENOUGH_STATES = 40000;
 
-constexpr int DEPTH_LIMIT = 4;
-
-enum Type { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES };
+enum CellType { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES };
 
 // Communication Tags
 constexpr int TAG_REQUEST_WORK = 1;
@@ -25,66 +25,54 @@ constexpr int TAG_UPDATE_MIN   = 4;
 constexpr int TAG_TERMINATE    = 5;
 constexpr int TAG_RESULT       = 6;
 
-class Coordinates {
-public:
+struct Coordinates {
     int r, c;
-    [[nodiscard]] Coordinates next(const int cols) const {
-        if (c + 1 >= cols) return {r + 1, 0};
-        return {r, c + 1};
-    }
 };
 
-class Shape {
-public:
-    Type type;
+struct Shape {
+    CellType type;
     Coordinates tiles[SHAPE_SIZE];
 };
 
-constexpr Shape ShapesUpperLeft[] = {
-    {T, {{0, 0}, {1, -1}, {1, 0}, {1, 1}}},
-    {T, {{0, 0}, {1, -1}, {1, 0}, {2, 0}}},
-    {T, {{0, 0}, {0, 1}, {0, 2}, {1, 1}}},
-    {T, {{0, 0}, {1, 0}, {1, 1}, {2, 0}}},
-    {Z, {{0,0}, {0,1}, {1, -1}, {1, 0}}},
-    {Z, {{0,0}, {0, 1}, {1, 1}, {1, 2}}},
-    {Z, {{0,0}, {1,-1}, {1, 0}, {2, -1}}},
-    {Z, {{0,0}, {1,0}, {1, 1}, {2, 1}}},
+struct CellState {
+    CellType type = NOT_DECIDED;
+    int id = 0;
 };
 
-constexpr Shape ShapesLowerRight[] = {
-    {Z, {{-1, -2}, {-1, -1}, {0, -1}, {0, 0}}},
-    {Z, {{-1, 0}, {0, -1}, {0, 0}, {1, -1}}},
-    {Z, {{0, -1}, {0, 0}, {1, -2}, {1, -1}}},
-    {Z, {{-2, -1}, {-1, -1}, {-1, 0}, {0, 0}}},
-    {T, {{0, -2}, {0, -1}, {0, 0}, {1, -1}}},
-    {T, {{-2, 0}, {-1, -1}, {-1, 0}, {0, 0}}},
-    {T, {{-1, -1}, {0, -2}, {0, -1}, {0, 0}}},
-    {T, {{-1, -1}, {0, -1}, {0, 0}, {1, -1}}}
+struct Solution {
+    CellState boardState[MAX_ROWS][MAX_COLS]{};
+
+    inline CellType& type(int r, int c) { return boardState[r][c].type; }
+    inline CellType type(int r, int c) const { return boardState[r][c].type; }
+    inline CellType& type(Coordinates p) { return boardState[p.r][p.c].type; }
+    inline CellType type(Coordinates p) const { return boardState[p.r][p.c].type; }
 };
 
-class Solution {
+class Node {
 public:
-    int price;
-    int shapeID[MAX_ROWS][MAX_COLS];
-    Type cellType[MAX_ROWS][MAX_COLS];
-    int counts[COUNT_OF_TYPES];
+    int price = 0;
+    int quatrominoCntPerType[COUNT_OF_TYPES]{};
+    Solution solution;
 
-    Solution() {
-        price = 0;
-        for (int &count : counts) count = 0;
-        for (int r = 0; r < MAX_ROWS; r++) {
-            for (int c = 0; c < MAX_COLS; c++) {
-                shapeID[r][c] = 0;
-                cellType[r][c] = NOT_DECIDED;
-            }
-        }
+    Node() {}
+    Node(const int R, const int C) {
+        quatrominoCntPerType[NOT_DECIDED] = R * C;
     }
-    void init(int R, int C) { counts[NOT_DECIDED] = R * C; }
+
+    inline CellType type(int r, int c) const { return solution.type(r, c); }
+    inline CellType type(Coordinates p) const { return solution.type(p); }
+    inline void setType(Coordinates p, CellType t) { solution.type(p) = t; }
+    inline void setCell(int r, int c, CellType t, int id) { solution.boardState[r][c] = {t, id}; }
 };
 
-struct State {
-    Solution sol;
+struct WorkData {
+    Node node;
     Coordinates p;
+};
+
+struct ResultPacket {
+    int price;
+    Solution sol;
 };
 
 class Solver {
@@ -98,8 +86,8 @@ public:
         vector<int> allPrices(R * C);
         for (int r = 0, idx = 0; r < R; r++) {
             for (int c = 0; c < C; c++) {
-                if (!(cin >> prices[r][c])) return false;
-                allPrices[idx] = prices[r][c];
+                if (!(cin >> pricesAssignment[r][c])) return false;
+                allPrices[idx] = pricesAssignment[r][c];
                 idx++;
             }
         }
@@ -108,22 +96,23 @@ public:
         const int k = (R * C) % 4;
         trivialBound = 0;
         for (int i = 0; i < k; i++) trivialBound += allPrices[i];
-        
+
         return true;
     }
 
     void broadcastParams() {
         MPI_Bcast(&R, 1, MPI_INT, 0, MPI_COMM_WORLD);
         MPI_Bcast(&C, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&prices, MAX_ROWS * MAX_COLS, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&pricesAssignment, MAX_ROWS * MAX_COLS, MPI_INT, 0, MPI_COMM_WORLD);
         MPI_Bcast(&trivialBound, 1, MPI_INT, 0, MPI_COMM_WORLD);
     }
-    
+
     void solve() {
         if (mpi_size == 1) {
-            bestSolution.price = INT_MAX;
             bestPriceShared = INT_MAX;
-            masterLogic();
+            Node initialSolution(R, C);
+            processTaskParallel({initialSolution, {0, 0}});
+            print();
             return;
         }
 
@@ -135,28 +124,46 @@ private:
     int mpi_rank, mpi_size;
     int R = 0, C = 0;
     int trivialBound = 0;
-    int prices[MAX_ROWS][MAX_COLS];
-    
-    Solution bestSolution;
+    int pricesAssignment[MAX_ROWS][MAX_COLS]{};
+
     int bestPriceShared = INT_MAX;
-    
+    Solution bestSolution;
+
+    static constexpr Shape ShapesUpperLeft[] = {
+        {T, {{0, 0}, {1, -1}, {1, 0}, {1, 1}}},
+        {T, {{0, 0}, {1, -1}, {1, 0}, {2, 0}}},
+        {T, {{0, 0}, {0, 1}, {0, 2}, {1, 1}}},
+        {T, {{0, 0}, {1, 0}, {1, 1}, {2, 0}}},
+        {Z, {{0,0}, {0,1}, {1, -1}, {1, 0}}},
+        {Z, {{0,0}, {0, 1}, {1, 1}, {1, 2}}},
+        {Z, {{0,0}, {1,-1}, {1, 0}, {2, -1}}},
+        {Z, {{0,0}, {1,0}, {1, 1}, {2, 1}}},
+    };
+
+    static constexpr Shape ShapesLowerRight[] = {
+        {Z, {{-1, -2}, {-1, -1}, {0, -1}, {0, 0}}},
+        {Z, {{-1, 0}, {0, -1}, {0, 0}, {1, -1}}},
+        {Z, {{0, -1}, {0, 0}, {1, -2}, {1, -1}}},
+        {Z, {{-2, -1}, {-1, -1}, {-1, 0}, {0, 0}}},
+        {T, {{0, -2}, {0, -1}, {0, 0}, {1, -1}}},
+        {T, {{-2, 0}, {-1, -1}, {-1, 0}, {0, 0}}},
+        {T, {{-1, -1}, {0, -2}, {0, -1}, {0, 0}}},
+        {T, {{-1, -1}, {0, -1}, {0, 0}, {1, -1}}}
+    };
+
     void masterLogic() {
         bestPriceShared = INT_MAX;
-        bestSolution.price = INT_MAX;
+        Node initialSolution(R, C);
 
-        Solution initialSolution;
-        initialSolution.init(R, C);
-        
-        queue<State> q;
+        queue<WorkData> q;
         q.push({initialSolution, {0, 0}});
-        vector<State> work;
-        const size_t ENOUGH_STATES = 30;
+        vector<WorkData> work;
 
-        // BFS Generation
-        while (!q.empty() && q.size() + work.size() < ENOUGH_STATES) {
-            State current = q.front();
+        // BFS Generation for Master
+        while (!q.empty() && q.size() + work.size() < MASTER_ENOUGH_STATES) {
+            auto [node, p] = q.front();
             q.pop();
-            generateNextStatesBFS(current, q, work);
+            generateNextStatesBFS(node, p, q, work);
         }
         while (!q.empty()) {
             work.push_back(q.front());
@@ -166,10 +173,8 @@ private:
         reverse(work.begin(), work.end());
 
         int active_slaves = mpi_size - 1;
-        
+
         while (active_slaves > 0) {
-            // cout << active_slaves << endl;
-            // cout << "work remaining: " <<  work.size() << endl;
             MPI_Status status;
             MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
             int src = status.MPI_SOURCE;
@@ -179,29 +184,22 @@ private:
                 MPI_Recv(nullptr, 0, MPI_BYTE, src, TAG_REQUEST_WORK, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 if (work.empty() || bestPriceShared == trivialBound) {
                     MPI_Send(nullptr, 0, MPI_BYTE, src, TAG_TERMINATE, MPI_COMM_WORLD);
-                    // cout << "sending terminate" << endl;
                 } else {
+                    while (!work.empty() && work.back().node.price >= bestPriceShared) { work.pop_back(); }
 
-                    
-                    while (!work.empty() && work.back().sol.price >= bestPriceShared) {work.pop_back();}
-                    
                     if(work.empty()){
-
                         MPI_Send(nullptr, 0, MPI_BYTE, src, TAG_TERMINATE, MPI_COMM_WORLD);
                     } else {
-                        State task = work.back(); work.pop_back();
-                    
-                        MPI_Send(&task, sizeof(State), MPI_BYTE, src, TAG_TASK, MPI_COMM_WORLD);
+                        WorkData task = work.back();
+                        work.pop_back();
+                        MPI_Send(&task, sizeof(WorkData), MPI_BYTE, src, TAG_TASK, MPI_COMM_WORLD);
                     }
-
                 }
             } else if (tag == TAG_NEW_MIN) {
                 int reported_min;
                 MPI_Recv(&reported_min, 1, MPI_INT, src, TAG_NEW_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 if (reported_min < bestPriceShared) {
                     bestPriceShared = reported_min;
-                    // cout << bestPriceShared << endl;
-                    // Rozeslání nového minima přes blokující Send
                     for (int i = 1; i < mpi_size; i++) {
                         if (i != src) {
                             MPI_Send(&bestPriceShared, 1, MPI_INT, i, TAG_UPDATE_MIN, MPI_COMM_WORLD);
@@ -210,11 +208,11 @@ private:
                 }
             } else if(tag == TAG_RESULT) {
                 active_slaves--;
-                Solution sol;
-                MPI_Recv(&sol, sizeof(Solution), MPI_BYTE, src, TAG_RESULT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                // cout << "received solution " << sol.price << endl;
-                if (sol.price <= bestSolution.price) {
-                    bestSolution = sol;
+                ResultPacket res;
+                MPI_Recv(&res, sizeof(ResultPacket), MPI_BYTE, src, TAG_RESULT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                if (res.price <= bestPriceShared) {
+                    bestPriceShared = res.price;
+                    bestSolution = res.sol;
                 }
             } else {
                 cout << "Received unexpected message from a slave!" << endl;
@@ -227,66 +225,69 @@ private:
 
     void slaveLogic() {
         bestPriceShared = INT_MAX;
-        bestSolution.price = INT_MAX;
 
         while (true) {
             MPI_Send(nullptr, 0, MPI_BYTE, 0, TAG_REQUEST_WORK, MPI_COMM_WORLD);
-            
+
             bool waiting_for_task = true;
             while (waiting_for_task) {
                 MPI_Status status;
                 MPI_Probe(0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-                
+
                 if (status.MPI_TAG == TAG_TERMINATE) {
                     MPI_Recv(nullptr, 0, MPI_BYTE, 0, TAG_TERMINATE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    MPI_Send(&bestSolution, sizeof(Solution), MPI_BYTE, 0, TAG_RESULT, MPI_COMM_WORLD);
-                    // cout << "Sending solution " << bestSolution.price  << " at best shared min: " << bestPriceShared << endl;
-                    return; 
+                    ResultPacket res = { bestPriceShared, bestSolution };
+                    MPI_Send(&res, sizeof(ResultPacket), MPI_BYTE, 0, TAG_RESULT, MPI_COMM_WORLD);
+                    return;
                 }
                 else if (status.MPI_TAG == TAG_TASK) {
-                    State task;
-                    MPI_Recv(&task, sizeof(State), MPI_BYTE, 0, TAG_TASK, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    
-                    slaveSolveParalell(task.p, task.sol);
-                    cout << "solved " << bestPriceShared << endl;
-                    waiting_for_task = false; 
+                    WorkData task;
+                    MPI_Recv(&task, sizeof(WorkData), MPI_BYTE, 0, TAG_TASK, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                    processTaskParallel(task);
+                    waiting_for_task = false;
                 }
                 else if (status.MPI_TAG == TAG_UPDATE_MIN) {
                     int new_min;
                     MPI_Recv(&new_min, 1, MPI_INT, 0, TAG_UPDATE_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            
-
                     if (new_min < bestPriceShared) {
                         bestPriceShared = new_min;
                     }
                 }
             }
         }
-        
     }
 
+    void processTaskParallel(WorkData task) {
+        queue<WorkData> bfsQueue;
+        bfsQueue.push(task);
+        vector<WorkData> work;
 
+        while (!bfsQueue.empty() && bfsQueue.size() + work.size() < SLAVE_ENOUGH_STATES) {
+            auto [node, p] = bfsQueue.front();
+            bfsQueue.pop();
+            generateNextStatesBFS(node, p, bfsQueue, work);
+        }
+        while (!bfsQueue.empty()) {
+            work.push_back(bfsQueue.front());
+            bfsQueue.pop();
+        }
 
-    void slaveSolveParalell(Coordinates p, Solution current) {
+        const int workSize = work.size();
 
-        #pragma omp parallel
-        {
-            #pragma omp single
-            {
-                solveRecursive(p, current, 0);
-            }
+        #pragma omp parallel for schedule(dynamic)
+        for (int i = 0; i < workSize; i++) {
+            solveRecursive(work[i].p, work[i].node);
         }
     }
 
-
-    void solveRecursive(Coordinates p, Solution& current, int depth) {
-
+    void solveRecursive(Coordinates p, Node& current) {
         int currentBest;
-        #pragma omp atomic read
+        #pragma omp atomic read relaxed
         currentBest = bestPriceShared;
 
         thread_local int calls = 0;
-        if ((++calls % 512) == 0) {
+        if ((++calls % 8192) == 0) {
             int flag = 0;
             int new_min = INT_MAX;
             #pragma omp critical (mpi_comm)
@@ -305,23 +306,23 @@ private:
                         bestPriceShared = new_min;
                     }
                 }
+                currentBest = new_min;
             }
         }
 
-        if (current.price >= currentBest) return;
-        if (currentBest == trivialBound) return;
-        if (abs(current.counts[Z] - current.counts[T]) - 1 > current.counts[NOT_DECIDED] / 4) return;
+        if (current.price >= currentBest || currentBest == trivialBound) return;
+        if (abs(current.quatrominoCntPerType[Z] - current.quatrominoCntPerType[T]) - 1 > current.quatrominoCntPerType[NOT_DECIDED] / 4) return;
 
         if (p.r >= R) {
-            if (abs(current.counts[Z] - current.counts[T]) <= 1) {
+            if (abs(current.quatrominoCntPerType[Z] - current.quatrominoCntPerType[T]) <= 1) {
                 if (current.price < currentBest) {
-                    #pragma omp critical
+                    #pragma omp critical(update_best)
                     {
                         if (current.price < bestPriceShared) {
                             #pragma omp atomic write
                             bestPriceShared = current.price;
-        
-                            bestSolution = current;
+                            bestSolution = current.solution;
+
                             MPI_Send(&bestPriceShared, 1, MPI_INT, 0, TAG_NEW_MIN, MPI_COMM_WORLD);
                         }
                     }
@@ -330,263 +331,114 @@ private:
             return;
         }
 
-        if (current.cellType[p.r][p.c] != NOT_DECIDED) {
-            solveRecursive(p.next(C), current, depth);
-            return;
+        for (const auto& shape : ShapesUpperLeft) {
+            if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
+                putShape(current, shape, p.r, p.c);
+                solveRecursive(nextNotDecidedPosition(p, current.solution), current);
+                removeShape(current, shape, p.r, p.c);
+            }
         }
 
-        if (depth < DEPTH_LIMIT) {
-            for (const auto& shape : ShapesUpperLeft) {
-                if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
-                    Solution nextState = current; 
-                    putShape(nextState, shape, p.r, p.c);
-                    
-                    #pragma omp task shared(bestSolution, bestPriceShared) firstprivate(nextState)
-                    {
-                        solveRecursive(p.next(C), nextState, depth + 1);
-                    }
-                }
-            }
-
-            Solution nextStateClear = current;
-            nextStateClear.cellType[p.r][p.c] = CLEAR;
-            bool valid = true;
-            for (const auto& shape : ShapesLowerRight) {
-                if (canPutShape(nextStateClear, shape, p.r, p.c, CLEAR)) {
-                    valid = false; break;
-                }
-            }
-            
-            if (valid) {
-                nextStateClear.counts[NOT_DECIDED]--;
-                nextStateClear.counts[CLEAR]++;
-                nextStateClear.price += prices[p.r][p.c];
-                
-                #pragma omp task shared(bestSolution, bestPriceShared) firstprivate(nextStateClear)
-                {
-                    solveRecursive(p.next(C), nextStateClear, depth + 1);
-                }
-            }
-            #pragma omp taskwait 
-        } else {
-            for (const auto& shape : ShapesUpperLeft) {
-                if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
-                    putShape(current, shape, p.r, p.c);
-                    solveRecursive(p.next(C), current, depth + 1);
-                    clearShape(current, shape, p.r, p.c);
-                }
-            }
-
-            current.cellType[p.r][p.c] = CLEAR;
-            bool valid = true;
-            for (const auto& shape : ShapesLowerRight) {
-                if (canPutShape(current, shape, p.r, p.c, CLEAR)) {
-                    valid = false; break;
-                }
-            }
-            if (valid) {
-                current.counts[NOT_DECIDED]--;
-                current.counts[CLEAR]++;
-                current.price += prices[p.r][p.c];
-                solveRecursive(p.next(C), current, depth + 1);
-                current.counts[NOT_DECIDED]++;
-                current.counts[CLEAR]--;
-                current.price -= prices[p.r][p.c];
-            }
-            current.cellType[p.r][p.c] = NOT_DECIDED;
+        if (tryPutClear(current, p)) {
+            solveRecursive(nextNotDecidedPosition(p, current.solution), current);
+            removeClear(current, p);
         }
     }
 
-
-    void slaveSolveParalellOld(Coordinates p, Solution current) {        
-        // Sequence part - generating states using BFS
-        queue<State> q;
-        q.push({current, p});
-        vector<State> items;
-        const size_t ENOUGH_STATES = 5000;
-
-        while (!q.empty() && q.size() + items.size() < ENOUGH_STATES) {
-            State current = q.front();
-            q.pop();
-            generateNextStatesBFS(current, q, items);
+    Coordinates nextNotDecidedPosition(Coordinates position, const Solution& solution) const {
+        while (position.r < R && solution.type(position) != NOT_DECIDED) {
+            position.c++;
+            if (position.c >= C) {
+                position.r++;
+                position.c = 0;
+            }
         }
-        while (!q.empty()) {
-            items.push_back(q.front());
-            q.pop();
-        }
-
-        int is = items.size();
-        
-        // Data paralelism
-        #pragma omp parallel for schedule(dynamic)
-        for (int i = 0; i < is; i++) {
-            solveAlmostSeq(items[i].p, items[i].sol);
-        }
-        // cout << "solved" << endl;
+        return position;
     }
 
-    void solveAlmostSeq(Coordinates p, Solution current) {
-        int currentBest;
-        #pragma omp atomic read
-        currentBest = bestPriceShared;
+    static void putShape(Node& node, const Shape& shape, const int r, const int c) {
+        node.quatrominoCntPerType[shape.type]++;
+        node.quatrominoCntPerType[NOT_DECIDED] -= SHAPE_SIZE;
+        for (auto &[rd, cd] : shape.tiles) {
+            node.setCell(r + rd, c + cd, shape.type, node.quatrominoCntPerType[shape.type]);
+        }
+    }
 
+    static void removeShape(Node& node, const Shape& shape, const int r, const int c) {
+        node.quatrominoCntPerType[shape.type]--;
+        node.quatrominoCntPerType[NOT_DECIDED] += SHAPE_SIZE;
+        for (auto &[rd, cd] : shape.tiles) {
+            node.solution.type(r + rd, c + cd) = NOT_DECIDED;
+        }
+    }
 
-        // thread_local int calls = 0;
-        // if ((++calls % 64) == 0) {
-        //     int flag = 0;
-        //     int new_min = INT_MAX;
-        //     #pragma omp critical (mpi_comm)
-        //     {
-        //         MPI_Iprobe(0, TAG_UPDATE_MIN, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
-        //         if (flag) {
-        //             MPI_Recv(&new_min, 1, MPI_INT, 0, TAG_UPDATE_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        //         }
-        //     }
+    bool canPutShape(const Node& node, const Shape& shape, const int r, const int c, const CellType allowed) const {
+        for (auto &[rd, cd] : shape.tiles) {
+            const int rTile = r + rd;
+            const int cTile = c + cd;
+            if (rTile < 0 || rTile >= R || cTile < 0 || cTile >= C) return false;
+            if (node.type(rTile, cTile) != allowed) return false;
+        }
+        return true;
+    }
 
-        //     if (new_min < currentBest) {
-        //         #pragma omp critical(update_best)
-        //         {
-        //             if (new_min < bestPriceShared) {
-        //                 #pragma omp atomic write
-        //                 bestPriceShared = new_min;
-        //             }
-        //         }
-        //     }
-        // }
+    bool tryPutClear(Node& node, Coordinates p) const {
+        node.setType(p, CLEAR);
 
-        if (current.price >= currentBest) return;
-        if (currentBest == trivialBound) return;
-        if (abs(current.counts[Z] - current.counts[T]) - 1 > current.counts[NOT_DECIDED] / 4) return;
+        for (const auto& shape : ShapesLowerRight) {
+            if (canPutShape(node, shape, p.r, p.c, CLEAR)) {
+                node.setType(p, NOT_DECIDED);
+                return false;
+            }
+        }
 
+        node.quatrominoCntPerType[NOT_DECIDED]--;
+        node.quatrominoCntPerType[CLEAR]++;
+        node.price += pricesAssignment[p.r][p.c];
+        return true;
+    }
+
+    void removeClear(Node& node, Coordinates p) const {
+        node.setType(p, NOT_DECIDED);
+        node.quatrominoCntPerType[NOT_DECIDED]++;
+        node.quatrominoCntPerType[CLEAR]--;
+        node.price -= pricesAssignment[p.r][p.c];
+    }
+
+    void generateNextStatesBFS(Node current, Coordinates p, queue<WorkData>& q, vector<WorkData>& items) {
         if (p.r >= R) {
-            if (abs(current.counts[Z] - current.counts[T]) <= 1) {
-                if (current.price < currentBest) {
-                    #pragma omp critical(update_best)
-                    {
-                        if (current.price < bestPriceShared) {
-                            #pragma omp atomic write
-                            bestPriceShared = current.price;
-                            bestSolution = current;
-                            // MPI_Send(&bestPriceShared, 1, MPI_INT, 0, TAG_NEW_MIN, MPI_COMM_WORLD);
-                        }
-                    }
-                }
-            }
-            return;
-        }
-
-        if (current.cellType[p.r][p.c] != NOT_DECIDED) {
-            solveAlmostSeq(p.next(C), current);
+            items.push_back({current, p});
             return;
         }
 
         for (const auto& shape : ShapesUpperLeft) {
             if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
-                putShape(current, shape, p.r, p.c);
-                solveAlmostSeq(p.next(C), current);
-                clearShape(current, shape, p.r, p.c);
+                Node nextNode = current;
+                putShape(nextNode, shape, p.r, p.c);
+                q.push({nextNode, nextNotDecidedPosition(p, nextNode.solution)});
             }
         }
 
-        current.cellType[p.r][p.c] = CLEAR;
-        bool valid = true;
-        for (const auto& shape : ShapesLowerRight) {
-            if (canPutShape(current, shape, p.r, p.c, CLEAR)) {
-                valid = false; break;
-            }
+        Node nextStateClear = current;
+        if (tryPutClear(nextStateClear, p)) {
+            q.push({nextStateClear, nextNotDecidedPosition(p, nextStateClear.solution)});
         }
-        if (valid) {
-            current.counts[NOT_DECIDED]--;
-            current.counts[CLEAR]++;
-            current.price += prices[p.r][p.c];
-            solveAlmostSeq(p.next(C), current);
-            current.counts[NOT_DECIDED]++;
-            current.counts[CLEAR]--;
-            current.price -= prices[p.r][p.c];
-        }
-        current.cellType[p.r][p.c] = NOT_DECIDED;
-    }
-
-    void generateNextStatesBFS(State current, queue<State>& q, vector<State>& items) {
-        Coordinates p = current.p;
-        while (p.r < R && current.sol.cellType[p.r][p.c] != NOT_DECIDED) {
-            p = p.next(C);
-        }
-
-        if (p.r >= R) {
-            current.p = p;
-            items.push_back(current);
-            return;
-        }
-
-        for (const auto& shape : ShapesUpperLeft) {
-            if (canPutShape(current.sol, shape, p.r, p.c, NOT_DECIDED)) {
-                State nextState = current;
-                putShape(nextState.sol, shape, p.r, p.c);
-                nextState.p = p.next(C);
-                q.push(nextState);
-            }
-        }
-
-        State nextStateClear = current;
-        nextStateClear.sol.cellType[p.r][p.c] = CLEAR;
-        bool valid = true;
-        for (const auto& shape : ShapesLowerRight) {
-            if (canPutShape(nextStateClear.sol, shape, p.r, p.c, CLEAR)) {
-                valid = false; break;
-            }
-        }
-        if (valid) {
-            nextStateClear.sol.counts[NOT_DECIDED]--;
-            nextStateClear.sol.counts[CLEAR]++;
-            nextStateClear.sol.price += prices[p.r][p.c];
-            nextStateClear.p = p.next(C);
-            q.push(nextStateClear);
-        }
-    }
-
-
-    void putShape(Solution& state, const Shape& shape, const int r, const int c) const {
-        state.counts[shape.type]++;
-        state.counts[NOT_DECIDED] -= SHAPE_SIZE;
-        for (auto &[rd, cd] : shape.tiles) {
-            state.cellType[r + rd][c + cd] = shape.type;
-            state.shapeID[r + rd][c + cd] = state.counts[shape.type];
-        }
-    }
-
-    void clearShape(Solution& state, const Shape& shape, const int r, const int c) const {
-        state.counts[shape.type]--;
-        state.counts[NOT_DECIDED] += SHAPE_SIZE;
-        for (auto &[rd, cd] : shape.tiles) {
-            state.cellType[r + rd][c + cd] = NOT_DECIDED;
-        }
-    }
-
-    [[nodiscard]] bool canPutShape(const Solution& state, const Shape& shape, const int r, const int c, const Type allowed) const {
-        for (auto &[rd, cd] : shape.tiles) {
-            const int rTile = r + rd;
-            const int cTile = c + cd;
-            if (rTile < 0 || rTile >= R || cTile < 0 || cTile >= C) return false;
-            if (state.cellType[rTile][cTile] != allowed) return false;
-        }
-        return true;
     }
 
     void print() const {
         for (int r = 0; r < R; r++) {
             for (int c = 0; c < C; c++) {
-                switch (bestSolution.cellType[r][c]) {
-                    case CLEAR: cout << prices[r][c]; break;
-                    case Z: cout << 'Z' << bestSolution.shapeID[r][c]; break;
-                    case T: cout << 'T' << bestSolution.shapeID[r][c]; break;
+                switch (bestSolution.boardState[r][c].type) {
+                    case CLEAR: cout << pricesAssignment[r][c]; break;
+                    case Z: cout << 'Z' << bestSolution.boardState[r][c].id; break;
+                    case T: cout << 'T' << bestSolution.boardState[r][c].id; break;
                     default: cout << '?'; break;
                 }
                 cout << '\t';
             }
             cout << endl;
         }
-        cout << bestSolution.price << endl;
+        cout << bestPriceShared << endl;
     }
 };
 
@@ -603,21 +455,18 @@ int main(int argc, char* argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     Solver solver(rank, size);
-    
+
     if (solver.read()) {
         solver.broadcastParams();
 
-        // Synchronizace a začátek měření
         MPI_Barrier(MPI_COMM_WORLD);
         double start_time = MPI_Wtime();
 
         solver.solve();
 
-        // Synchronizace a konec měření
         MPI_Barrier(MPI_COMM_WORLD);
         double end_time = MPI_Wtime();
 
-        // Výpis času pouze z hlavního vlákna
         if (rank == 0) {
             cout << "Cas behu: " << (end_time - start_time) << " sekund" << endl;
         }

@@ -110,7 +110,7 @@ public:
 
             if (currentBestLoop == trivialBound) continue;
 
-            solveAlmostSeq(work[i].p, work[i].node);
+            solveRecursive(work[i].p, work[i].node);
         }
     }
     void print() const {
@@ -239,7 +239,7 @@ private:
         }
     }
 
-    void solveAlmostSeq(Coordinates p, Node& current) {
+    void solveRecursive(Coordinates p, Node& current) {
         int currentBest;
         #pragma omp atomic read relaxed
         currentBest = bestPriceShared;
@@ -266,13 +266,13 @@ private:
         for (const auto& shape : ShapesUpperLeft) {
             if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
                 putShape(current, shape, p.r, p.c);
-                solveAlmostSeq(nextNotDecidedPosition(p, current.solution), current);
+                solveRecursive(nextNotDecidedPosition(p, current.solution), current);
                 removeShape(current, shape, p.r, p.c);
             }
         }
 
         if (tryPutClear(current, p)) {
-            solveAlmostSeq(nextNotDecidedPosition(p, current.solution), current);
+            solveRecursive(nextNotDecidedPosition(p, current.solution), current);
             removeClear(current, p);
         }
     }
@@ -281,8 +281,16 @@ private:
 int main() {
     Solver solver;
     if (solver.read()) {
+        const double start_time = omp_get_wtime();
+
         solver.solve();
+
+
+        const double end_time = omp_get_wtime();
+
         solver.print();
+
+        cout << "Cas behu: " << (end_time - start_time) << " sekund" << endl;
     }
     return 0;
 }
