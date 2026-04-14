@@ -5,9 +5,20 @@
 #include <climits>
 #include <queue>
 #include <omp.h>
+#include <iomanip>
 #include <mpi.h>
 
 using namespace std;
+
+#define ENABLE_MPI_LOGS
+
+#ifdef ENABLE_MPI_LOGS
+#define LOG_MPI(msg) do { \
+std::cout << std::fixed << std::setprecision(6) << MPI_Wtime() << "s " << msg << std::endl; \
+} while(false)
+#else
+#define LOG_MPI(msg) do {} while(false)
+#endif
 
 constexpr int MAX_ROWS = 20;
 constexpr int MAX_COLS = 20;
@@ -152,6 +163,7 @@ private:
     };
 
     void masterLogic() {
+        LOG_MPI("Number of active slaves: " << (mpi_size - 1));
         bestPriceShared = INT_MAX;
         Node initialSolution(R, C);
 
@@ -172,6 +184,8 @@ private:
 
         reverse(work.begin(), work.end());
 
+        LOG_MPI("Master generated " << work.size() << " states.");
+
         int active_slaves = mpi_size - 1;
 
         while (active_slaves > 0) {
@@ -183,15 +197,18 @@ private:
             if (tag == TAG_REQUEST_WORK) {
                 MPI_Recv(nullptr, 0, MPI_BYTE, src, TAG_REQUEST_WORK, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 if (work.empty() || bestPriceShared == trivialBound) {
+                    LOG_MPI("Master sends TERMINATE to slave " << src << ".");
                     MPI_Send(nullptr, 0, MPI_BYTE, src, TAG_TERMINATE, MPI_COMM_WORLD);
                 } else {
                     while (!work.empty() && work.back().node.price >= bestPriceShared) { work.pop_back(); }
 
                     if(work.empty()){
+                        LOG_MPI("Master sends TERMINATE to slave " << src << ".");
                         MPI_Send(nullptr, 0, MPI_BYTE, src, TAG_TERMINATE, MPI_COMM_WORLD);
                     } else {
                         WorkData task = work.back();
                         work.pop_back();
+                        LOG_MPI("Master sends work to slave " << src << ".");
                         MPI_Send(&task, sizeof(WorkData), MPI_BYTE, src, TAG_TASK, MPI_COMM_WORLD);
                     }
                 }
@@ -224,9 +241,10 @@ private:
     }
 
     void slaveLogic() {
+        LOG_MPI("Slave " << mpi_rank << " ready. Threads per process: " << omp_get_max_threads());
         bestPriceShared = INT_MAX;
-
         while (true) {
+            LOG_MPI("Slave " << mpi_rank << " requests a Task from Master.");
             MPI_Send(nullptr, 0, MPI_BYTE, 0, TAG_REQUEST_WORK, MPI_COMM_WORLD);
 
             bool waiting_for_task = true;
@@ -238,6 +256,7 @@ private:
                     MPI_Recv(nullptr, 0, MPI_BYTE, 0, TAG_TERMINATE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     ResultPacket res = { bestPriceShared, bestSolution };
                     MPI_Send(&res, sizeof(ResultPacket), MPI_BYTE, 0, TAG_RESULT, MPI_COMM_WORLD);
+                    LOG_MPI("Slave " << mpi_rank << " terminates.");
                     return;
                 }
                 else if (status.MPI_TAG == TAG_TASK) {
