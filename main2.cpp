@@ -3,7 +3,6 @@
 #include <cmath>
 #include <algorithm>
 #include <climits>
-#include <queue>
 #include <omp.h>
 
 using namespace std;

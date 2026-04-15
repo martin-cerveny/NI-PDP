@@ -6,82 +6,61 @@
 #include <chrono>
 using namespace std;
 
+constexpr int MAX_ROWS =  20;
+constexpr int MAX_COLS = 20;
 constexpr int SHAPE_SIZE = 4;
 
-enum Type { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES};
+enum CellType { Z, T, CLEAR, NOT_DECIDED, COUNT_OF_TYPES };
 
-class TilePosition {
-public:
+struct  Coordinates {
     int r, c;
-	
-    [[nodiscard]] TilePosition next(const int cols) const {
-        if (c+1 >= cols) {
-            return {r + 1, 0};
-        }
-        return {r, c + 1};
-    }
 };
 
-class Shape {
+struct Shape {
+    CellType type;
+    Coordinates tiles[SHAPE_SIZE];
+};
+
+struct CellState {
+    CellType type = NOT_DECIDED;
+    int id = 0;
+};
+
+struct Solution {
+    CellState boardState[MAX_ROWS][MAX_COLS]{};
+
+    inline CellType& type(int r, int c) { return boardState[r][c].type; }
+    inline CellType type(int r, int c) const { return boardState[r][c].type; }
+    inline CellType& type(Coordinates p) { return boardState[p.r][p.c].type; }
+    inline CellType type(Coordinates p) const { return boardState[p.r][p.c].type; }
+};
+
+class Node {
 public:
-    Type type;
-    TilePosition tiles[SHAPE_SIZE];
-};
+    int price = 0;
+    int quatrominoCntPerType[COUNT_OF_TYPES]{};
+    Solution solution;
 
-constexpr Shape ShapesUpperLeft[] = {
-    {T, {{0, 0}, {1, -1}, {1, 0}, {1, 1}}},
-    {T, {{0, 0}, {1, -1}, {1, 0}, {2, 0}}},
-    {T, {{0, 0}, {0, 1}, {0, 2}, {1, 1}}},
-    {T, {{0, 0}, {1, 0}, {1, 1}, {2, 0}}},
-
-    {Z, {{0,0}, {0,1}, {1, -1}, {1, 0}}},
-    {Z, {{0,0}, {0, 1}, {1, 1}, {1, 2}}},
-    {Z, {{0,0}, {1,-1}, {1, 0}, {2, -1}}},
-    {Z, {{0,0}, {1,0}, {1, 1}, {2, 1}}},
-};
-
-constexpr Shape ShapesLowerRight[] = {
-    {Z, {{-1, -2}, {-1, -1}, {0, -1}, {0, 0}}},
-    {Z, {{-1, 0}, {0, -1}, {0, 0}, {1, -1}}},
-    {Z, {{0, -1}, {0, 0}, {1, -2}, {1, -1}}},
-    {Z, {{-2, -1}, {-1, -1}, {-1, 0}, {0, 0}}},
-
-    {T, {{0, -2}, {0, -1}, {0, 0}, {1, -1}}},
-    {T, {{-2, 0}, {-1, -1}, {-1, 0}, {0, 0}}},
-    {T, {{-1, -1}, {0, -2}, {0, -1}, {0, 0}}},
-    {T, {{-1, -1}, {0, -1}, {0, 0}, {1, -1}}}
-};
-
-
-class Board {
-public:
-    int price;
-    vector<vector<int>> shapeID;
-    vector<vector<Type>> cellType;
-    int counts[COUNT_OF_TYPES]{};
-
-    Board(const int R, const int C)
-    : price(0), shapeID(R, vector<int>(C, 0)), cellType(R, vector<Type>(C, NOT_DECIDED)) {
-        for (auto& count: counts) {
-            count = 0;
-        }
-        counts[NOT_DECIDED] = R*C;
+    Node(const int R, const int C) {
+        quatrominoCntPerType[NOT_DECIDED] = R * C;
     }
 
-
+    inline CellType type(int r, int c) const { return solution.type(r, c); }
+    inline CellType type(Coordinates p) const { return solution.type(p); }
+    inline void setType(Coordinates p, CellType t) { solution.type(p) = t; }
+    inline void setCell(int r, int c, CellType t, int id) { solution.boardState[r][c] = {t, id}; }
 };
 
 class Solver{
 public:
-
     bool read() {
         if (!(cin >> R >> C)) return false;
-        prices = vector<vector<int>>(R, vector<int>(C));
+
         vector<int> allPrices(R*C);
         for (int r = 0, idx = 0; r < R; r++) {
             for (int c = 0; c < C; c++) {
-                if (!(cin >> prices[r][c])) return false;
-                allPrices[idx] = prices[r][c];
+                if (!(cin >> pricesAssignment[r][c])) return false;
+                allPrices[idx] = pricesAssignment[r][c];
                 idx++;
             }
         }
@@ -94,130 +73,143 @@ public:
         }
         return true;
     }
+
     void solve() {
-        currentSolution = Board(R, C);
-        bestSolution = Board(R, C);
-        bestSolution.price = INT_MAX;
-        currentSolution.price = 0;
-        solveRecursive({0, 0});
+        Node initial(R, C);
+        solveRecursive({0, 0}, initial);
     }
+
     void print() const {
-         for (int r = 0; r < R; r++) {
+        for (int r = 0; r < R; r++) {
             for (int c = 0; c < C; c++) {
-                switch (bestSolution.cellType[r][c]) {
-                    case CLEAR: cout << prices[r][c]; break;
-                    case Z: cout << 'Z' << bestSolution.shapeID[r][c]; break;
-                    case T: cout << 'T' << bestSolution.shapeID[r][c]; break;
+                switch (bestSolution.boardState[r][c].type) {
+                    case CLEAR: cout << pricesAssignment[r][c]; break;
+                    case Z: cout << 'Z' << bestSolution.boardState[r][c].id; break;
+                    case T: cout << 'T' << bestSolution.boardState[r][c].id; break;
                     default: cout << '?'; break;
                 }
                 cout << '\t';
             }
             cout << endl;
         }
-        cout << bestSolution.price << endl;
-        cout << "Calls: " << totalCalls << endl;
+        cout << bestPrice << endl;
     }
 private:
     int R = 0;
     int C = 0;
-    int totalCalls = 0;
+    int bestPrice = INT_MAX;
     int trivialBound = 0;
-    vector<vector<int>> prices;
-    Board currentSolution = Board(0,0);
-    Board bestSolution = Board(0,0);
-    
-    void putShape(const Shape& shape, const int r, const int c) {
-        currentSolution.counts[shape.type]++;
-        currentSolution.counts[NOT_DECIDED] -= SHAPE_SIZE;
+    int pricesAssignment[MAX_ROWS][MAX_COLS]{};
+    Solution bestSolution;
+
+    static constexpr Shape ShapesUpperLeft[] = {
+        {T, {{0, 0}, {1, -1}, {1, 0}, {1, 1}}},
+        {T, {{0, 0}, {1, -1}, {1, 0}, {2, 0}}},
+        {T, {{0, 0}, {0, 1}, {0, 2}, {1, 1}}},
+        {T, {{0, 0}, {1, 0}, {1, 1}, {2, 0}}},
+        {Z, {{0,0}, {0,1}, {1, -1}, {1, 0}}},
+        {Z, {{0,0}, {0, 1}, {1, 1}, {1, 2}}},
+        {Z, {{0,0}, {1,-1}, {1, 0}, {2, -1}}},
+        {Z, {{0,0}, {1,0}, {1, 1}, {2, 1}}},
+    };
+
+    static constexpr Shape ShapesLowerRight[] = {
+        {Z, {{-1, -2}, {-1, -1}, {0, -1}, {0, 0}}},
+        {Z, {{-1, 0}, {0, -1}, {0, 0}, {1, -1}}},
+        {Z, {{0, -1}, {0, 0}, {1, -2}, {1, -1}}},
+        {Z, {{-2, -1}, {-1, -1}, {-1, 0}, {0, 0}}},
+        {T, {{0, -2}, {0, -1}, {0, 0}, {1, -1}}},
+        {T, {{-2, 0}, {-1, -1}, {-1, 0}, {0, 0}}},
+        {T, {{-1, -1}, {0, -2}, {0, -1}, {0, 0}}},
+        {T, {{-1, -1}, {0, -1}, {0, 0}, {1, -1}}}
+    };
+
+    Coordinates nextNotDecidedPosition(Coordinates position, const Solution& solution) const {
+        while (position.r < R && solution.type(position) != NOT_DECIDED) {
+            position.c++;
+            if (position.c >= C) {
+                position.r++;
+                position.c = 0;
+            }
+        }
+        return position;
+    }
+
+    static void putShape(Node& node, const Shape& shape, const int r, const int c) {
+        node.quatrominoCntPerType[shape.type]++;
+        node.quatrominoCntPerType[NOT_DECIDED] -= SHAPE_SIZE;
         for (auto &[rd, cd] : shape.tiles) {
-            const int rTile = r + rd;
-            const int cTile = c + cd;
-            currentSolution.cellType[rTile][cTile] = shape.type;
-            currentSolution.shapeID[rTile][cTile] = currentSolution.counts[shape.type];
+            node.setCell(r + rd, c + cd, shape.type, node.quatrominoCntPerType[shape.type]);
         }
     }
-    
-    void clearShape(const Shape& shape, const int r, const int c) {
-        currentSolution.counts[shape.type]--;
-        currentSolution.counts[NOT_DECIDED] += SHAPE_SIZE;
+
+    static void removeShape(Node& node, const Shape& shape, const int r, const int c) {
+        node.quatrominoCntPerType[shape.type]--;
+        node.quatrominoCntPerType[NOT_DECIDED] += SHAPE_SIZE;
         for (auto &[rd, cd] : shape.tiles) {
-            const int rTile = r + rd;
-            const int cTile = c + cd;
-            currentSolution.cellType[rTile][cTile] = NOT_DECIDED;
+            node.solution.type(r + rd, c + cd) = NOT_DECIDED;
         }
     }
-    
 
-
-    [[nodiscard]] bool canPutShape(const Shape& shape, const int r, const int c, const Type allowed) const {
+    bool canPutShape(const Node& node, const Shape& shape, const int r, const int c, const CellType allowed) const {
         for (auto &[rd, cd] : shape.tiles) {
             const int rTile = r + rd;
             const int cTile = c + cd;
-            if (rTile < 0 || rTile >= R || cTile < 0 || cTile >= C) {
-                return false;
-            }
-
-            if (currentSolution.cellType[rTile][cTile] != allowed) {
-                return false;
-            }
-
+            if (rTile < 0 || rTile >= R || cTile < 0 || cTile >= C) return false;
+            if (node.type(rTile, cTile) != allowed) return false;
         }
-
         return true;
-
     }
 
-    void solveRecursive(TilePosition p) {
-        totalCalls++;
-        if (currentSolution.price >= bestSolution.price) return;
-        if (bestSolution.price == trivialBound) return;
-        if (abs(currentSolution.counts[Z] - currentSolution.counts[T]) - 1 > currentSolution.counts[NOT_DECIDED] / 4)
-            return;
+    bool tryPutClear(Node& node, Coordinates p) const {
+        node.setType(p, CLEAR);
 
+        for (const auto& shape : ShapesLowerRight) {
+            if (canPutShape(node, shape, p.r, p.c, CLEAR)) {
+                node.setType(p, NOT_DECIDED);
+                return false;
+            }
+        }
+
+        node.quatrominoCntPerType[NOT_DECIDED]--;
+        node.quatrominoCntPerType[CLEAR]++;
+        node.price += pricesAssignment[p.r][p.c];
+        return true;
+    }
+
+    void removeClear(Node& node, Coordinates p) const {
+        node.setType(p, NOT_DECIDED);
+        node.quatrominoCntPerType[NOT_DECIDED]++;
+        node.quatrominoCntPerType[CLEAR]--;
+        node.price -= pricesAssignment[p.r][p.c];
+    }
+
+    void solveRecursive(Coordinates p, Node& current) {
+        if (current.price >= bestPrice || bestPrice == trivialBound) return;
+        if (abs(current.quatrominoCntPerType[Z] - current.quatrominoCntPerType[T]) - 1 > current.quatrominoCntPerType[NOT_DECIDED] / 4) return;
 
         if (p.r >= R) {
-            if (abs(currentSolution.counts[Z] - currentSolution.counts[T]) <= 1) {
-                if (currentSolution.price < bestSolution.price) {
-                    bestSolution = currentSolution;
+            if (abs(current.quatrominoCntPerType[Z] - current.quatrominoCntPerType[T]) <= 1) {
+                if (current.price < bestPrice) {
+                    bestPrice = current.price;
+                    bestSolution = current.solution;
                 }
             }
             return;
         }
 
-        if (currentSolution.cellType[p.r][p.c] != NOT_DECIDED) {
-            solveRecursive(p.next(C));
-            return;
-        }
-
-        // 1) Try place shape
         for (const auto& shape : ShapesUpperLeft) {
-            if (canPutShape(shape, p.r, p.c, NOT_DECIDED)) {
-                putShape(shape, p.r, p.c);
-                solveRecursive(p.next(C));
-                if (bestSolution.price == trivialBound) return;
-                clearShape(shape, p.r, p.c);
+            if (canPutShape(current, shape, p.r, p.c, NOT_DECIDED)) {
+                putShape(current, shape, p.r, p.c);
+                solveRecursive(nextNotDecidedPosition(p, current.solution), current);
+                removeShape(current, shape, p.r, p.c);
             }
         }
 
-        // 2) Try leave not covered
-        // A decision to create CLEAR tile cannot create a space, where some shape might fit
-        currentSolution.cellType[p.r][p.c] = CLEAR;
-        for (const auto& shape : ShapesLowerRight) {
-            if (canPutShape(shape, p.r, p.c, CLEAR)) {
-                currentSolution.cellType[p.r][p.c] = NOT_DECIDED;
-                return;
-            }
+        if (tryPutClear(current, p)) {
+            solveRecursive(nextNotDecidedPosition(p, current.solution), current);
+            removeClear(current, p);
         }
-        currentSolution.counts[NOT_DECIDED] --;
-        currentSolution.counts[CLEAR] ++;
-        currentSolution.price += prices[p.r][p.c];
-        solveRecursive(p.next(C));
-        if (bestSolution.price == trivialBound) return;
-        currentSolution.cellType[p.r][p.c] = NOT_DECIDED;
-        currentSolution.counts[NOT_DECIDED] ++;
-        currentSolution.counts[CLEAR] --;
-        currentSolution.price -= prices[p.r][p.c];
-
     }
 
 
