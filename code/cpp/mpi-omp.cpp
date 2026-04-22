@@ -305,30 +305,32 @@ private:
         #pragma omp atomic read relaxed
         currentBest = bestPriceShared;
 
-        thread_local int calls = 0;
-        if ((++calls % 8192) == 0) {
-            int flag = 0;
-            int new_min = INT_MAX;
-            #pragma omp critical (mpi_comm)
-            {
-                MPI_Iprobe(0, TAG_UPDATE_MIN, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
-                if (flag) {
-                    MPI_Recv(&new_min, 1, MPI_INT, 0, TAG_UPDATE_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                }
-            }
-
-            if (new_min < currentBest) {
-                #pragma omp critical(update_best)
+        #pragma omp master
+        {
+            static int calls = 0;
+            if ((++calls % 8192) == 0) {
+                int flag = 0;
+                int new_min = INT_MAX;
+                #pragma omp critical (mpi_comm)
                 {
-                    if (new_min < bestPriceShared) {
-                        #pragma omp atomic write
-                        bestPriceShared = new_min;
+                    MPI_Iprobe(0, TAG_UPDATE_MIN, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+                    if (flag) {
+                        MPI_Recv(&new_min, 1, MPI_INT, 0, TAG_UPDATE_MIN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     }
                 }
-                currentBest = new_min;
+
+                if (new_min < currentBest) {
+                    #pragma omp critical(update_best)
+                    {
+                        if (new_min < bestPriceShared) {
+                            #pragma omp atomic write
+                            bestPriceShared = new_min;
+                        }
+                    }
+                    currentBest = new_min;
+                }
             }
         }
-
         if (current.price >= currentBest || currentBest == trivialBound) return;
         if (abs(current.quatrominoCntPerType[Z] - current.quatrominoCntPerType[T]) - 1 > current.quatrominoCntPerType[NOT_DECIDED] / 4) return;
 

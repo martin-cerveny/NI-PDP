@@ -4,3 +4,6 @@ a.out
 *.png
 venv/
 *.out
+*.aux
+*.log
+*.pdf
