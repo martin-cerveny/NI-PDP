@@ -1,0 +1,293 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[czech]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{subfigure}
+\usepackage{caption}
+\geometry{margin=1in}
+\usepackage{tikz}
+
+% Definice pro quatromino Z (4 políčka s mřížkou)
+\newcommand{\quatZ}{\begin{tikzpicture}[scale=0.13,baseline=0pt]
+    \foreach \x/\y in {0/1, 1/1, 1/0, 2/0} 
+        \draw[fill=gray!70] (\x,\y) rectangle (\x+1,\y+1);
+\end{tikzpicture}}
+
+% Definice pro quatromino T (4 políčka s mřížkou)
+\newcommand{\quatT}{\begin{tikzpicture}[scale=0.13,baseline=0pt]
+    \foreach \x/\y in {0/1, 1/1, 2/1, 1/0} 
+        \draw[fill=gray!70] (\x,\y) rectangle (\x+1,\y+1);
+\end{tikzpicture}}
+\begin{document}
+
+\begin{center}
+    \textbf{Semestrální projekt NI-PDP 2025/2026:} \\[0.5em]
+    \textbf{Paralelní algoritmus pro řešení problému} \\[1.5em]
+    \textbf{Martin Červený} \\
+    magisterské studium, FIT ČVUT, Thakurova 9, 160 00 Praha 6 \\
+    March 21, 2026
+\end{center}
+
+\section{Definice problému a popis sekvenčního algoritmu}
+\subsection{Zadání a vstupní data}
+Úloha SQM spočívá v optimálním pokrytí herní desky quatrominy.
+\begin{itemize}
+    \item \textbf{Vstupní data:} Rozměry obdélníkové herní desky $S$ jsou $3 \le a, b \le 20$, přičemž platí $ab \ge 15$. Každé políčko desky je ohodnoceno přirozeným číslem z intervalu $\langle 1, 100 \rangle$.
+    \item \textbf{Množina quatromin:} Pracujeme s množinou quatromin $P = \{T: \quatT, Z: \quatZ \}$. Jednotlivá quatromina lze při vkládání libovolně otáčet a překlápět.
+    \item \textbf{Formát vstupu:} Standardní vstup obsahující rozměry $a, b$ a následnou matici ohodnocení.
+    \item \textbf{Formát výstupu:} Maticový popis výsledného řešení. Každé umístěné quatromino je popsáno čtveřicí slabik \texttt{[T|Z]<index>}, kde \texttt{index} je unikátní pořadové číslo. U nepokrytých políček je vypsáno jejich ohodnocení. Pro rychlejší kontrolu správnosti program vypíše i cenu tohoto pokrytí.
+\end{itemize}
+
+\subsection{Definice pokrytí}
+Pokrytí herní desky $S$ quatrominy z množiny $P$ je definováno jako nepřekrývající se umístění jednotlivých quatromin takové, že:
+\begin{enumerate}
+    \item \textbf{Podmínka maximality:} Žádné další quatromino již vložit nelze.
+    \item \textbf{Podmínka parity:} Počet použitých kusů quatromin typu $T$ a typu $Z$ se musí rovnat nebo lišit maximálně o 1.
+\end{enumerate}
+Některá políčka desky mohou zůstat nepokrytá. \textbf{Cena pokrytí} je definována jako součet ohodnocení nepokrytých políček. Cílem je nalézt jedno pokrytí s \textbf{minimální cenou}.
+
+\subsection{Sekvenční řešení}
+
+Jedná se o prohledávání stavového prostoru metodou větví a řezů a sekvenční algoritmus je tedy typu BB-DFS.
+
+\subsubsection{Specifika implementace}
+\begin{itemize}
+    \item \textbf{Statická organizace paměti:} Pro popis herní desky a stavu řešení používám statické pole \texttt{[20][20]} namísto dynamických vektorů. Vzhledem k limitům zadání (max $20\times20$) toto řešení eliminuje režii alokace na haldě.
+\end{itemize}
+
+\subsubsection{Systematické vyplňování a kanonické ukotvení}
+Algoritmus prochází desku v řádkovém uspořádání (zleva doprava, shora dolů). Pro každé první nerozhodnuté políčko $[r, c]$ provádí binární volbu:
+
+\begin{enumerate}
+    \item \textbf{Vynechání:} Políčko je označeno jako neobsazené (\textit{CLEAR}).
+    \item \textbf{Umístění:} Na políčko je položeno quatromino tak, aby $[r, c]$ bylo jeho \textbf{prvním obsazeným bodem} (nejvýše položeným, případně nejvíce vlevo).
+\end{enumerate}
+
+\paragraph{Vlastnosti tohoto přístupu:}
+\begin{itemize}
+    \item \textbf{Bezkoliznost:} Díky hornímu-levému ukotvení quatromino expanduje pouze do dosud nerozhodnutých oblastí. Nikdy nezasahuje do políček nad sebou nebo vlevo od sebe, která jsou již uzavřena.
+    \item \textbf{Úplnost:} Pokud by libovolné quatromino pokrývalo políčko $[r, c]$ jinou svou částí, muselo by o jeho umístění být rozhodnuto už dříve. Tím je zaručeno, že prozkoumáme všechna možná pokrytí právě jednou.
+\end{itemize}
+
+\subsubsection{Ořezávání větví (Pruning)}
+V souladu se zadáním a pro zvýšení efektivity jsou implementovány tyto řezy:
+\begin{enumerate}
+    \item \textbf{Cenový řez:} Větev je ukončena, pokud je aktuální cena (součet ohodnocení neobsazených políček) větší nebo rovna dosavadnímu nalezenému minimu.
+    \item \textbf{Paritní řez:} Větve, kde již matematicky není možné splnit podmínku o paritě počtu quatromin typu T a Z vzhledem k počtu zbývajících volných políček.
+    \item \textbf{Heuristika maximality (Vlastní rozšíření):} Při označení políčka jako neobsazené program okamžitě kontroluje, zda v daném místě nevznikla oblast, kam by bylo možné umístit quatromino tak, aby toto políčko bylo jeho pravým dolním rohem. Pokud ano, větev je ihned oříznuta, protože by na konci výpočtu nesplnila podmínku maximality.
+    \item \textbf{Ukončení při dosažení meze:} Vzhledem k tomu, že každé quatromino pokrývá přesně 4 políčka, je teoretický minimální počet nepokrytých políček dán zbytkem po dělení: $k = (a \cdot b) \pmod 4$. Protože žádné pokrytí nemůže mít z definice nižší cenu než tento prostý součet nejlevnějších políček, představuje tato hodnota triviální dolní mez. Nalezením řešení, jehož cena je rovna této mezi, je program ukončen.
+\end{enumerate}
+
+\section{Popis paralelního algoritmu a jeho implementace v OpenMP - taskový paralelismus}
+Paralelní verze algoritmu využívá k rozkladu výpočetního stromu mechanismus \textbf{tasků} v OpenMP.
+\subsection{Struktura paralelního algoritmu}
+Algoritmus je spuštěn v paralelní sekci (\texttt{\#pragma omp parallel}), kde jedno vlákno (\texttt{\#pragma omp single}) inicializuje první volání rekurzivní funkce.
+\begin{itemize}
+    \item \textbf{Generování tasků:} V horních patrech výpočetního stromu algoritmus pro každou přípustnou volbu (položení quatromina nebo označení políčka jako \textit{CLEAR}) vytvoří nový task pomocí direktivy \texttt{\#pragma omp task}.
+    \item \textbf{Kopírování stavu:} Aby nedocházelo ke kolizím v popisu herní desky, je pro každý task vytvořena lokální kopie uzlu (\texttt{Node}) pomocí klauzule \texttt{firstprivate}.
+    \item \textbf{Sdílení globálního minima:} Proměnné \texttt{bestPriceShared} a \texttt{bestSolution} jsou sdíleny mezi všemi vlákny. Aktualizace těchto hodnot musí být vždy v OpenMP kritické sekci \texttt{\#pragma omp critical}.
+\end{itemize}
+
+\subsection{Řízení granularity a škálování}
+Klíčovým parametrem pro efektivitu je konstanta \texttt{DEPTH\_LIMIT}, která omezuje hloubku, do které jsou generovány nové tasky.
+\begin{itemize}
+    \item \textbf{Aktivní stav:} Pokud je aktuální hloubka rekurze menší než \texttt{DEPTH\_LIMIT}, algoritmus generuje tasky, které jsou následně plánovačem OpenMP přiřazovány volným vláknům.
+    \item \textbf{Sekvenční dojezd:} Po dosažení limitu hloubky vlákno přechází do sekvenčního režimu (standardní DFS s backtrackováním), kde již negeneruje další tasky, ale zpracovává celý podstrom lokálně. Tím se eliminuje režie spojená se správou příliš malých tasků.
+    \item \textbf{Stav nečinnosti:} Jelikož je výpočetní strom nerovnoměrný, mohlo by dojít k situaci, kdy některá vlákna dokončí svou práci dříve a zůstanou nevyužitá. Runtime systém OpenMP tento problém řeší automaticky pomocí mechanismu \textit{work-stealing}. Vlákno, které vyčerpá své lokální úkoly, se pokusí převzít (ukrást) nevyřízené tasky od jiných, vytížených vláken. Tím je zajištěno maximální využití všech procesorových jader až do úplného dokončení výpočtu.
+    \item \textbf{Granularita:} Hloubka generování tasků byla nastavena na \texttt{DEPTH\_LIMIT = 5}, což při faktoru větvení až 9 poskytuje dostatek úloh pro efektivní vytížení všech jader při minimální režii.
+\end{itemize}
+
+\subsection{Synchronizace a aktualizace řešení}
+Při nalezení nového nejlepšího řešení je nutné zajistit konzistentní aktualizaci sdílených dat:
+\begin{enumerate}
+    \item Nejdříve se provede rychlá kontrola \texttt{currentPrice < bestPriceShared}.
+    \item Pokud je podmínka splněna, vlákno vstoupí do kritické sekce (\texttt{\#pragma omp critical}), kde znovu ověří platnost a provede zápis výsledné matice a ceny.
+    \item Cena je aktualizována pomocí \texttt{\#pragma omp atomic write}, aby ostatní tasky měly co nejdříve k dispozici novou mez pro ořezávání.
+\end{enumerate}
+
+\subsection{Spouštění programu}
+Program se kompiluje s podporou OpenMP (např. \texttt{g++ -fopenmp -std=c++17}). Počet vláken lze ovlivnit v kódu.
+\begin{itemize}
+    \item \textbf{Příkazová řádka:} \texttt{./quatromino\_solver < input\_data.txt}
+\end{itemize}
+
+\begin{table}[h!]
+\centering
+\caption{Naměřené výsledky sekvenčního algoritmu na vstupech z \texttt{courses.fit.cvut.cz}}
+\begin{tabular}{lrrc}
+\toprule
+\textbf{Soubor} & \textbf{Sekvenční čas [s]} & \textbf{\# volání rek. fce} & \textbf{Minimální cena} \\ 
+\midrule
+mapa3\_5.txt  & 0.000   & 403   & 25 \\
+mapa5\_5.txt  & 0.002   & 8K    & 23 \\
+mapa3\_11.txt & 0.020   & 114K  & 33 \\
+mapa7\_7.txt  & 0.133   & 737K  & 10 \\
+mapa4\_15.txt & 0.001   & 6K    & 0  \\
+mapa5\_11.txt & 1.796   & 11M   & 18 \\
+mapa7\_10.txt & 1.102   & 7M    & 5  \\
+mapa5\_15.txt & 113.834 & 709M  & 8  \\
+mapa7\_11.txt & 10.157  & 64M   & 5  \\
+mapa15\_5.txt & 9.057   & 50M   & 5  \\
+mapa9\_9.txt  & 22.548  & 140M  & 5  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\newpage
+
+\section{Popis paralelního algoritmu a jeho implementace v OpenMP - datový paralelismus}
+Datový paralelismus v tomto algoritmu využívá statický rozklad práce v úvodní fázi výpočtu.
+
+\subsection{Struktura algoritmu: BFS-DFS kombinace}
+Algoritmus pracuje ve dvou jasně oddělených fázích:
+\begin{enumerate}
+    \item \textbf{Generování práce (Sekvenční BFS):} Hlavní vlákno nejprve provádí prohledávání do šířky (BFS) pomocí fronty. Cílem je vygenerovat dostatečné množství nezávislých podproblémů (uzlů stavového stromu). Tato fáze probíhá, dokud počet připravených stavů nedosáhne limitu definovaného konstantou \texttt{ENOUGH\_STATES}.
+    \item \textbf{Paralelní zpracování (Paralelní FOR):} Vygenerované stavy jsou uloženy ve vektoru \texttt{work}. Nad tímto vektorem je spuštěna paralelní smyčka \texttt{\#pragma omp parallel for}. Každé vlákno si převezme uzel (částečně zaplněnou desku) a dokončí jeho prohledání pomocí sekvenčního algoritmu DFS.
+\end{enumerate}
+
+\subsection{Činnost procesů a vyvažování zátěže}
+\begin{itemize}
+    \item \textbf{Aktivní stav:} Vlákno je v aktivním stavu, kdykoliv zpracovává přiřazený podproblém z vektoru \texttt{work} pomocí funkce \texttt{solveRecursive}.
+    \item \textbf{Plánování (Dynamic Scheduling):} Protože jsou jednotlivé podstromy různě hluboké (vlivem ořezávání), byla použita klauzule \texttt{schedule(dynamic)}. Ta zajišťuje, že vlákno, které dokončí svou práci dříve, si okamžitě bere další dostupný index z fronty prací. Tím se předchází situaci, kdy by některá vlákna čekala na dokončení jednoho masivního podstromu v jiném vlákně.
+    \item \textbf{Stav nečinnosti:} Vlákna přecházejí do stavu nečinnosti až po vyčerpání všech připravených stavů ve vektoru, kde čekají na implicitní bariéře na konci \texttt{parallel for} sekce.
+\end{itemize}
+
+\subsection{Parametry a škálování}
+Klíčovým parametrem pro škálování je konstanta \texttt{ENOUGH\_STATES = 6000}.
+\begin{itemize}
+    \item Tato hodnota byla zvolena tak, aby počet úkolů řádově převyšoval počet dostupných jader (obvykle 10--100x), což umožňuje efektivní dynamické plánování.
+    \item Příliš vysoká hodnota by zvyšovala paměťovou režii na uložení stavů, zatímco příliš nízká hodnota by vedla k špatnému vyvážení zátěže (load imbalance).
+\end{itemize}
+
+\subsection{Synchronizace a sdílení dat}
+Podobně jako u taskové verze, i zde je využita \textbf{kritická sekce} (\texttt{critical}) pro bezpečnou aktualizaci nejlepšího nalezeného řešení. Jelikož každé vlákno pracuje na vlastním podstromu s vlastní kopií objektu \texttt{Node}, není nutná žádná další synchronizace v rámci popisu desky.
+
+\subsection{Spouštění programu}
+\begin{itemize}
+    \item \textbf{Sémantika příkazové řádky:} Program očekává data na standardním vstupu: \\
+    \texttt{./quatromino\_data\_par < data.txt}
+    \item \textbf{Řízení paralelismu:} Počet vláken lze nastavit v programu.
+\end{itemize}
+
+\section{Popis paralelního algoritmu a jeho implementace v MPI}
+Tento algoritmus využívá hybridní paralelismus kombinující distribuovanou paměť (MPI) pro komunikaci mezi uzly a sdílenou paměť (OpenMP) pro výpočet v rámci jednotlivých uzlů. Architektura je postavena na modelu Master-Slave.
+Fragment kódu
+
+\section{Popis paralelního algoritmu a jeho implementace v MPI}
+
+Implementace využívá model \textbf{Master-Slave} s dynamickým přidělováním práce. Algoritmus je navržen jako hybridní, kde každý MPI proces (Slave) dále paralelizuje svou přidělenou práci pomocí OpenMP datového paralelismu.
+
+\subsection{Struktura Master-Slave a procesů}
+Prostředí je rozděleno na jeden řídicí proces (Rank 0) a $N-1$ výpočetních procesů.
+\begin{itemize}
+    \item \textbf{Master (Rank 0):} Působí jako centrální plánovač a správce globálního minima. Neprovádí samotný DFS výpočet. Generuje počáteční stavy pomocí BFS. Následně v cyklu obsluhuje požadavky Slave procesů a rozdává jim práci.
+    \item \textbf{Slave (Rank 1+):} Výpočetní jednotky, které žádají Mastera o práci. Po obdržení stavu jej vnitřně vícevláknově zpracují logikou OpenMP datového paralelismu --- odvodí ze stavu pomocí lokálního algoritmu BFS pole dílčích podproblémů, které následně paralelně dořeší pomocí metody DFS.
+\end{itemize}
+
+\subsection{Činnost procesů v aktivním stavu a stavu nečinnosti}
+\begin{itemize}
+\item \textbf{Master (Rank 0):} Nachází se v reaktivní řídicí smyčce, kde využívá blokující volání \texttt{MPI\_Probe} k detekci a obsluze událostí:
+\begin{enumerate}
+    \item \texttt{TAG\_REQUEST\_WORK}: Obsluha žádosti o novou práci ze zásobníku.
+    \item \texttt{TAG\_UPDATE\_MIN}: Master přijme hlášení o nalezení nového minima. Nejdříve provede \textbf{verifikaci}, zda je nahlášená cena skutečně nižší než dosud uložené globální optimum. Pokud ano, aktualizuje svou hodnotu a zajistí \textbf{propagaci změny} všem ostatním Slave procesům pomocí zprávy \texttt{TAG\_UPDATE\_MIN}.
+    \item \texttt{TAG\_RESULT}: Ukončení spolupráce se Slave procesem a sběr finálních dat.
+\end{enumerate}
+
+\item \textbf{Slave (Rank 1+):} Výpočetní jednotky s hybridním modelem paralelismu:
+\begin{itemize}
+    \item \texttt{TAG\_RESULT} Pokud Slave během výpočtu nalezne řešení s nižší cenou, než jakou aktuálně disponuje, okamžitě Masterovi odešle pouze hodnotu této ceny (\texttt{TAG\_NEW\_MIN}). Tímto lehkým oznámením umožní Masterovi včas ořezávat větve ostatním procesům.
+    \item \texttt{TAG\_NEW\_MIN} Slave neposílá kompletní matici řešení po každém nalezení lokálního minima (aby nezatěžoval síť). Celé nejlepší nalezené řešení (strukturu \texttt{ResultPacket}) odesílá Masterovi \textbf{pouze jednou}, a to jako reakci na přijatý pokyn k ukončení (\texttt{TAG\_TERMINATE}). Tím je zaručeno, že Master získá to nejlepší řešení, které daný uzel za celou dobu své existence nalezl.
+\end{itemize}
+\end{itemize}
+
+\subsection{Specifika a odchylky od standardního modelu}
+\begin{itemize}
+\item \textbf{Asynchronní aktualizace minima:} Slave proces během DFS periodicky (jednou za 8192 rekurzivních volání) provádí neblokující kontrolu příchozích zpráv pomocí \texttt{MPI\_Iprobe}. Pokud Master ohlásil nové globální optimum (\texttt{TAG\_UPDATE\_MIN}), Slave jej přijme a okamžitě využije pro efektivnější ořezávání větví.
+\end{itemize}
+
+\subsection{Konstanty a parametry škálování}
+Pro dosažení optimálního výkonu byly zvoleny tyto konstanty:
+\begin{itemize}
+    \item \texttt{MASTER\_ENOUGH\_STATES = 30}: Tato hodnota byla zvolena jako kompromis pro modely s menším počtem (2--3) Slave procesů. 
+    \begin{itemize}
+        \item \textbf{Riziko nízkého počtu:} Při generování příliš malého množství stavů hrozí, že jeden proces obdrží výpočetně těžký úkol, zatímco ostatní své lehčí větve dokončí dříve a zůstanou nečinní. 
+        \item \textbf{Riziko vysokého počtu:} Naopak velké množství lehkých stavů sice lépe rozkládá zátěž, ale neúměrně zvyšuje četnost požadavků na Mastera a tím i celkovou režii MPI komunikace.
+    \end{itemize}
+    \item \texttt{SLAVE\_ENOUGH\_STATES = 40000}: Vysoká hodnota na úrovni Slava zajišťuje, že vnitřní OpenMP smyčka má k dispozici tisíce úloh pro perfektní vyvážení zátěže mezi jádry CPU. Hodnota je volena stejně jako v OpenMP takovém paralelismu.
+\end{itemize}
+
+\subsection{Struktura příkazové řádky}
+Program se spouští standardním způsobem pro MPI aplikace. Pro korektní běh hybridního modelu je nutné specifikovat počet procesů. Počet vláken řídíme uvnitř programu.
+\begin{verbatim}
+# Kompilace
+mpic++ -O3 -fopenmp quatromino_mpi.cpp -o quatromino_mpi -std=c++17
+
+# Spuštění na 4 uzlech
+mpirun -np 4 ./quatromino_mpi < vstup.txt
+\end{verbatim}
+Sémantika: \texttt{-np} definuje celkový počet MPI procesů (1 Master + $N-1$ Slaves). Vstup je přesměrován ze souboru do \texttt{stdin}.
+
+\section{Naměřené výsledky a vyhodnocení}
+\begin{table}[h]
+\centering
+\caption{Naměřené časy pro různé typy paralelismu a počty vláken [s]}
+\label{tab:mereni_paralelismu}
+\begin{tabular}{@{}llccc@{}}
+\toprule
+\textbf{Algoritmus} & \textbf{Konfigurace} & \textbf{Úloha 1} & \textbf{Úloha 2} & \textbf{Úloha 3} \\ \midrule
+\textbf{Sekvenční} & 1 jádro (referenční) & 505.54 & 1387.16 & 354.91 \\ \midrule
+\multirow{7}{*}{\textbf{OMP Task}} & 1 vlákno & 535.41 & 1478.52 & 376.37 \\
+ & 2 vlákna & 321.26 & 750.43 & 228.42 \\
+ & 4 vlákna & 163.52 & 378.13 & 124.00 \\
+ & 12 vláken & 54.71 & 127.50 & 32.36 \\
+ & 16 vláken & 35.10 & 94.41 &  24.02 \\
+ & 32 vláken & 17.97 & 47.25 &  12.04 \\
+ & 48 vláken & 12.38 & 32.09 & 8.31 \\ \midrule
+\multirow{7}{*}{\textbf{OMP Data}} & 1 vlákno & 592.37 & 1443.50 & 371.44 \\
+ & 2 vlákna & 271.83 & 726.53 & 184.65 \\
+ & 4 vlákna & 133.60 & 365.68 & 93.36 \\
+ & 12 vláken & 46.27 & 122.10 & 31.24 \\
+ & 16 vláken & 33.59 & 91.42 & 23.35 \\
+ & 32 vláken & 20.59 & 45.87 & 11.70 \\
+ & 48 vláken & 11.34 & 30.36 & 7.97 \\ \midrule
+\multirow{2}{*}{\textbf{MPI (Hybridní)}} & 1+3 procesy (48 vláken) & 5.08 & 12.90 & 4.12 \\
+ & 1+4 procesy (48 vláken) & 3.84 & 10.05 & 3.33 \\ \bottomrule
+\end{tabular}
+\par\smallskip
+\small * $N = $ optimální počet vláken zjištěný z OMP měření.
+\end{table}
+
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{graph-1.png}
+    \caption{Zrychlení pro Úlohu 1}
+    \label{fig:uloha1}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{graph-2.png}
+    \caption{Zrychlení pro Úlohu 2}
+    \label{fig:uloha2}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{graph-3.png}
+    \caption{Zrychlení pro Úlohu 3}
+    \label{fig:uloha3}
+\end{figure}
+
+
+\section{Závěr}
+Celkové zhodnocení semestrální práce a zkušeností získaných během semestru.
+
+\section{Literatura}
+% Zde vložte zdroje
+
+\end{document}
