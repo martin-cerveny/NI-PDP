@@ -20,9 +20,9 @@ t_data = [
 # Vlákna a časy pro MPI (3x48 a 4x48)
 threads_mpi = [144, 192]
 t_mpi = [
-    [5.08, 3.84],   # Úloha 1
-    [12.90, 10.05], # Úloha 2
-    [4.12, 3.33]    # Úloha 3
+    [4.89, 3.81],   # Úloha 1
+    [12.29, 9.64], # Úloha 2
+    [3.91, 3.05]    # Úloha 3
 ]
 
 # Generování grafu pro každou úlohu

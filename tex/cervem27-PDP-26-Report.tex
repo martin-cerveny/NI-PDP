@@ -274,8 +274,8 @@ Sémantika: \texttt{-np} definuje celkový počet MPI procesů (1 Master + $N-1$
  & 16 vláken & 33.59 & 91.42 & 23.35 \\
  & 32 vláken & 20.59 & 45.87 & 11.70 \\
  & 48 vláken & 11.34 & 30.36 & 7.97 \\ \midrule
-\multirow{2}{*}{\textbf{MPI (Hybridní)}} & 1+3 procesy (48 vláken) & 5.08 & 12.90 & 4.12 \\
- & 1+4 procesy (48 vláken) & 3.84 & 10.05 & 3.33 \\ \bottomrule
+\multirow{2}{*}{\textbf{MPI (Hybridní)}} & 1+3 procesy (48 vláken) & 4.89 & 12.29 & 3.91 \\
+ & 1+4 procesy (48 vláken) & 3.81 & 9.64 & 3.05 \\ \bottomrule
 \end{tabular}
 \par\smallskip
 \small * $N = $ optimální počet vláken zjištěný z OMP měření.
@@ -331,4 +331,51 @@ Klíčové postřehy z vývoje:
 
 Podařilo se mi tak vytvořit systém, který plně využívá dostupný hardware a potvrzuje, že paralelní přístup je pro řešení podobných úloh v rozumném čase naprosto nezbytný.
 
+\newpage
+
+\section*{Appendix: Vstupní data (Mapy)}
+
+Zde jsou uvedeny datové podklady pro testované mapy ve formátu $R \times C$ následované maticí hodnot.
+
+\subsection*{Mapa 1}
+\textbf{Rozměry:} $9 \times 8$
+\begin{verbatim}
+9 8
+100 100 100 100 100 100 100 100
+100 100 100 100 100 100 100 100
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+\end{verbatim}
+
+\subsection*{Mapa 2}
+\textbf{Rozměry:} $9 \times 8$
+\begin{verbatim}
+9 8
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+1 1 1 1 1 1 1 1
+\end{verbatim}
+
+\subsection*{Mapa 3}
+\textbf{Rozměry:} $6 \times 13$
+\begin{verbatim}
+6 13
+100 100 100 100 100 100 100 100 100 100 100 100 100
+100 100 100 100 100 100 100 100 100 100 100 100 100
+100 100 100 100 100 100 100 100 100 100 100 100 100
+100 100 100 100 100 100 100 100 100 100 100 100 100
+100 100 100 100 100 100 100 100 100 100 100 100 1
+100 100 100 100 100 100 100 100 100 100 100 1 100
+\end{verbatim}
 \end{document}
